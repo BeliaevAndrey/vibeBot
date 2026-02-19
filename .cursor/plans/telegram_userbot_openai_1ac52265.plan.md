@@ -14,26 +14,54 @@ flowchart TB
     subgraph Telegram
         TG[Telegram API]
     end
-    
+
     subgraph UserBot
-        Main[userbot_main]
-        Handler[Event Handler]
+        Main[main]
+        Handler[Handler]
         Main --> Handler
     end
-    
+
     subgraph src
-        Store[context_store]
+        Userbot[userbot]
+        Questionnaire[questionnaire]
+        OpenAIClient[openai_client]
         Logger[logger]
-        OpenAI[openai_client]
+        ContextStore[context_store]
     end
-    
-    Handler -->|"входящее сообщение"| Store
-    Handler -->|"ошибки"| Logger
-    Store -->|"дамп каждые 10 пар"| Logger
-    Store -->|"история 10 пар"| OpenAI
-    OpenAI -->|"ответ"| Handler
-    Handler -->|"reply"| TG
-    TG -->|"события"| Handler
+
+    subgraph resource
+        Greetings[greetings.json]
+        Questions[questions.json]
+        QuestionPrompt[question_prompt.txt]
+    end
+
+    subgraph outputs
+        LogsDir[logs/]
+        DumpsDir[dumps/]
+        ResultsJson[questionnaire_results/json]
+        ResultsText[questionnaire_results/text]
+    end
+
+    Config[config]
+    Config -->|"HR_ACCOUNT, CANDIDATE_USERNAME"| Questionnaire
+    Config -->|"OPENAI_*"| OpenAIClient
+
+    Handler --> Userbot
+    Userbot -->|"события ЛС"| Questionnaire
+    Questionnaire -->|"приветствие"| Greetings
+    Questionnaire -->|"вопросы"| Questions
+    Questionnaire -->|"промпт оценки"| QuestionPrompt
+    Questionnaire -->|"согласие/ответ"| OpenAIClient
+    OpenAIClient -->|"оценка ответа"| Questionnaire
+    Questionnaire -->|"report, questionnaire_result"| ResultsJson
+    Questionnaire -->|"текст отчёта"| TG
+    Questionnaire -->|"переслать HR"| TG
+    Questionnaire -->|"сохранить отчёт"| ResultsText
+    Questionnaire -->|"ошибки"| Logger
+    Logger --> LogsDir
+    ContextStore -->|"дамп"| Logger
+    Logger --> DumpsDir
+    TG -->|"входящие"| Handler
 ```
 
 
@@ -42,17 +70,27 @@ flowchart TB
 
 ```
 UserBot/
+├── resource/
+│   ├── json/
+│   │   ├── greetings.json       # приветствия для первого сообщения
+│   │   └── questions.json       # вопросы опросника по ключу "question"
+│   └── prompts/
+│       └── question_prompt.txt # промпт для оценки ответа LLM
 ├── src/
 │   ├── __init__.py
-│   ├── openai_client.py    # запросы к OpenAI, получение ответа
-│   ├── context_store.py    # хранение 10 пар {user_msg, bot_msg, datetime}
-│   ├── logger.py           # логгер: ошибки, дамп контекста
-│   └── userbot.py          # Telethon-клиент, обработчик событий
-├── logs/                   # логи ошибок (errors.log)
-├── dumps/                  # дампы контекста (context_YYYYMMDD_HHMMSS.json)
-├── config.py               # переменные окружения
+│   ├── openai_client.py        # запросы к OpenAI (диалог, оценка ответа)
+│   ├── context_store.py         # хранение 10 пар для чата
+│   ├── logger.py                # логгер: ошибки в logs/, дамп в dumps/
+│   ├── questionnaire.py         # опросник: состояние, report, red_flags, результат
+│   └── userbot.py               # Telethon-клиент, обработчик, запуск опросника
+├── logs/                        # логи ошибок (errors.log)
+├── dumps/                       # дампы контекста (context_*.json)
+├── questionnaire_results/
+│   ├── json/                    # дампы questionnaire_result (JSON)
+│   └── text/                    # текстовые отчёты (username_YYYY_MM_DD-HH_MM.txt)
+├── config.py                    # переменные окружения
 ├── config.example.py
-├── main.py                 # точка входа
+├── main.py                      # точка входа
 ├── requirements.txt
 └── README.md
 ```
@@ -126,4 +164,28 @@ openai>=1.0.0
 
 - Обработчики событий Telethon — `async def`, вызовы к OpenAI — синхронные; выполнять через `asyncio.to_thread(openai_client.get_reply, ...)` или вынести в sync-обёртку, чтобы не блокировать event loop.
 - Поля `username`, `phone_number` из ТЗ — сохраняем в паре для возможного логирования/отладки, но ключ контекста только `user_id`.
+
+---
+
+## Опросник (модификация)
+
+### Конфигурация опросника
+
+Переменные окружения (добавить в [config.py](config.py) и [config.example.py](config.example.py)):
+
+- **HR_ACCOUNT** (str) — идентификатор аккаунта HR (username или user_id), в ЛС которого пересылается отчёт.
+- **CANDIDATE_USERNAME** (str) — идентификатор кандидата, которому бот пишет первым; пока что единственный (например, `@username` или username без @).
+
+### Логика опросника
+
+- Бот при старте (или по таймеру/команде) **пишет первым** пользователю из списка кандидатов (пока только `CANDIDATE_USERNAME`).
+- Приветствие выбирается случайно из `resource/json/greetings.json`.
+- Ведётся счётчик **red_flags: int = 0** на сессию опроса.
+- Согласие/отказ: ответ пользователя анализируется через OpenAI (утвердительно/положительно → переход к вопросам; отрицательно → вежливое прощание).
+- Вопросы из `resource/json/questions.json` по ключу `"question"` во вложенных словарях.
+- Каждый ответ пользователя отправляется в LLM вместе со словарём вопроса; промпт — [resource/prompts/question_prompt.txt](resource/prompts/question_prompt.txt). Ответ LLM парсится в словарь и добавляется в структуру отчёта (`report`). Если `profanity_detected is true`: увеличить `red_flags`; при `red_flags == 1` — вежливо попросить повторить; при `red_flags > 1` — вежливо свернуть беседу.
+- По завершении (все вопросы или досрочный выход) формируется **questionnaire_result** (user — telegram-username, date — ISO UTC+3, questions, profanity_detected), дамп в `questionnaire_results/json/`. Если свёрнуто из-за грубости — `profanity_detected: true`.
+- Текст отчёта формируется из questionnaire_result; при `profanity_detected == true` указать причину раннего завершения. Переслать в ЛС на **HR_ACCOUNT**. Сохранить сообщение в `questionnaire_results/text/` в файле `username_YYYY_MM_DD-HH_MM.txt`.
+
+Модули опросника размещать в `src/`. Логирование — через существующий модуль в `src/logger.py`, логи в `logs/`.
 

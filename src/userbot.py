@@ -1,6 +1,6 @@
 """
-UserBot — учётная запись Telegram с ответами через OpenAI.
-Только входящие ЛС, синхронные обёртки telethon.sync.
+UserBot — учётная запись Telegram, опросник с OpenAI.
+Пишет первым кандидату (CANDIDATE_USERNAME), обрабатывает ответы по сценарию опросника.
 """
 
 import asyncio
@@ -12,9 +12,8 @@ from telethon.errors import (
     FloodWaitError,
 )
 
-from config import API_ID, API_HASH, PHONE
-from .context_store import add_exchange, get_messages_for_openai
-from . import openai_client
+from config import API_ID, API_HASH, PHONE, CANDIDATE_USERNAME
+from . import questionnaire
 from .logger import setup
 
 SESSION_NAME = "userbot_session"
@@ -22,7 +21,7 @@ log = setup()
 
 
 def run_userbot() -> None:
-    """Запуск UserBot: слушает входящие ЛС, отвечает через OpenAI."""
+    """Запуск UserBot: приветствие кандидату, затем опросник по входящим ЛС."""
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
     try:
@@ -32,6 +31,21 @@ def run_userbot() -> None:
             client.sign_in(password=input("Введите пароль 2FA: "))
         me = client.get_me()
         print(f"Авторизован: {me.first_name} (@{me.username})")
+
+        candidate_user_id: int | None = None
+        if CANDIDATE_USERNAME:
+            try:
+                entity = client.get_entity(CANDIDATE_USERNAME)
+                candidate_user_id = entity.id
+                candidate_username = getattr(entity, "username", None)
+                greeting = questionnaire.get_greeting(candidate_username)
+                client.send_message(entity, greeting)
+                questionnaire.init_session(candidate_user_id, getattr(entity, "username", None))
+                print(f"Отправлено приветствие кандидату {CANDIDATE_USERNAME}")
+            except Exception as e:
+                log.exception("Не удалось отправить приветствие кандидату: %s", e)
+                print(f"Ошибка приветствия: {e}")
+
         print("Ожидаю сообщения в ЛС... (Ctrl+C для выхода)\n")
 
         @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
@@ -43,17 +57,35 @@ def run_userbot() -> None:
                 sender_id = event.sender_id
                 if not sender_id:
                     return
+                if candidate_user_id is not None and sender_id != candidate_user_id:
+                    return
 
-                messages = get_messages_for_openai(sender_id)
-                messages.append({"role": "user", "content": text})
+                sender = await event.get_sender()
+                username = getattr(sender, "username", None)
+                username_str = f"@{username}" if username else None
 
-                reply_text = await asyncio.to_thread(
-                    openai_client.get_reply,
-                    messages,
-                )
+                state = questionnaire.get_state(sender_id)
+                if not state:
+                    return
 
-                await event.reply(reply_text)
-                add_exchange(sender_id, text, reply_text)
+                if state["state"] == "greeting_sent":
+                    reply_text, done = await questionnaire.handle_agreement(
+                        sender_id, username_str, text
+                    )
+                elif state["state"] == "asking":
+                    reply_text, done = await questionnaire.handle_answer(
+                        sender_id, username_str, text
+                    )
+                else:
+                    return
+
+                if reply_text:
+                    await event.reply(reply_text)
+
+                if done:
+                    result = questionnaire.finish_session(sender_id)
+                    if result:
+                        questionnaire.dump_result_and_save_text(result, client)
             except Exception:
                 log.exception("Handler error")
                 raise
