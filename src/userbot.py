@@ -85,7 +85,7 @@ def run_userbot() -> None:
                 if done:
                     result = questionnaire.finish_session(sender_id)
                     if result:
-                        questionnaire.dump_result_and_save_text(result, client)
+                        await questionnaire.dump_result_and_save_text(result, client)
             except Exception:
                 log.exception("Handler error")
                 raise

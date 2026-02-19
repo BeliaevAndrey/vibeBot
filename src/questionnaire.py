@@ -200,12 +200,16 @@ async def handle_answer(
     criteria_list = "\n".join(f"- {c}" for c in criteria)
 
     template = _load_prompt_template()
-    prompt = template.format(
+    template_head, template_data = template.split("----- cut -----")
+
+    prompt_data = template_data.format(
         question_title=question_title,
         question_text=question_text,
         candidate_answer=message_text,
         criteria_list=criteria_list,
     )
+    
+    prompt = f"{template_head}\n{prompt_data}"
 
     raw = await asyncio.to_thread(openai_client.get_completion, prompt)
     try:
@@ -251,12 +255,19 @@ def build_questionnaire_result_from_state(state: dict[str, Any]) -> dict[str, An
     questions_dict = {}
     for r in report:
         qn = r["q_number"]
-        questions_dict[qn] = {
-            "question": r["question"],
-            "answer": r["answer"],
-            "compliance": r["compliance_percent"],
-            "comment": r.get("comment") or "",
-        }
+        if qn not in questions_dict:
+            questions_dict[qn] = {
+                "question": r["question"],
+                "answer": r["answer"],
+                "compliance": r["compliance_percent"],
+                "comment": r.get("comment") or "",
+            }
+        else:
+            questions_dict[qn]["answer"] = r["answer"]
+            questions_dict[qn]["compliance"] = r["compliance_percent"]
+            questions_dict[qn]["comment"] = r.get("comment") or ""
+        if r.get("profanity_detected"):
+            questions_dict[qn]["rejected_answer"] = r["answer"]
 
     profanity_detected = state.get("red_flags", 0) > 1 or any(
         r.get("profanity_detected") for r in report
@@ -273,7 +284,7 @@ def build_questionnaire_result_from_state(state: dict[str, Any]) -> dict[str, An
     }
 
 
-def dump_result_and_save_text(
+async def dump_result_and_save_text(
     result: dict[str, Any],
     client: Any,
     send_to_hr: bool = True,
@@ -304,6 +315,8 @@ def dump_result_and_save_text(
     for q_num, q_data in result.get("questions", {}).items():
         lines.append(f"Вопрос {q_num}: {q_data.get('question', '')}")
         lines.append(f"Ответ: {q_data.get('answer', '')}")
+        if q_data.get("rejected_answer"):
+            lines.append(f"Некорректный ответ (red_flag): {q_data['rejected_answer']}")
         lines.append(f"Соответствие: {q_data.get('compliance', 0)}%")
         if q_data.get("comment"):
             lines.append(f"Комментарий: {q_data['comment']}")
@@ -317,7 +330,7 @@ def dump_result_and_save_text(
 
     if send_to_hr and HR_ACCOUNT and client:
         try:
-            client.send_message(HR_ACCOUNT, text_body)
+            await client.send_message(HR_ACCOUNT, text_body)
         except Exception as e:
             log.exception("Send to HR failed: %s", e)
 

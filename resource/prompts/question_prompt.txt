@@ -16,8 +16,8 @@
 - Процент = (число выполненных / всего критериев) * 100 (округли).
 - Комментарий только при false, иначе пустая строка.
 - Без лишнего текста до/после JSON.
-
+----- cut -----
 Данные:
-ВОПРОС: {question_title} — {question_text}
+ВОПРОС: {question_title} - {question_text}
 ОТВЕТ: {candidate_answer}
 КРИТЕРИИ: {criteria_list}
