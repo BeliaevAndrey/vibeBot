@@ -4,7 +4,6 @@
 
 import asyncio
 import json
-import re
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
@@ -19,7 +18,6 @@ _RESOURCE_DIR = Path(__file__).resolve().parent.parent / "resource"
 _GREETINGS_PATH = _RESOURCE_DIR / "json" / "greetings.json"
 _COMPANY_DATA_PATH = _RESOURCE_DIR / "json" / "company_data.json"
 _QUESTIONS_PATH = _RESOURCE_DIR / "json" / "questions.json"
-_PROMPT_PATH = _RESOURCE_DIR / "prompts" / "question_prompt.txt"
 _RESULTS_JSON_DIR = Path("questionnaire_results") / "json"
 _RESULTS_TEXT_DIR = Path("questionnaire_results") / "text"
 
@@ -68,31 +66,16 @@ def _substitute_greeting_placeholders(text: str, candidate_username: str | None 
     return text
 
 
-def _load_questions() -> dict[str, Any]:
+def _load_questions() -> list[dict[str, Any]]:
+    """Вопросы: массив [ {"question": "...", "acceptance": "..."}, ... ]."""
     with open(_QUESTIONS_PATH, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _load_prompt_template() -> str:
-    with open(_PROMPT_PATH, encoding="utf-8") as f:
-        return f.read()
+        data = json.load(f)
+    return data if isinstance(data, list) else list(data.values()) if isinstance(data, dict) else []
 
 
 def _ensure_results_dirs() -> None:
     _RESULTS_JSON_DIR.mkdir(parents=True, exist_ok=True)
     _RESULTS_TEXT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _parse_llm_json(raw: str) -> dict[str, Any]:
-    """Извлечь JSON из ответа LLM (возможен блок ```json ... ```)."""
-    raw = raw.strip()
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
-    if match:
-        raw = match.group(1).strip()
-    match = re.search(r"\{[\s\S]*\}", raw)
-    if match:
-        return json.loads(match.group(0))
-    return json.loads(raw)
 
 
 def get_greeting(candidate_username: str | None = None) -> str:
@@ -107,16 +90,25 @@ def get_greeting(candidate_username: str | None = None) -> str:
 
 
 def get_question_keys() -> list[str]:
-    return sorted(_load_questions().keys(), key=int)
+    """Индексы вопросов: ["0", "1", ...]."""
+    questions = _load_questions()
+    return [str(i) for i in range(len(questions))]
 
 
 def get_question_text(q_key: str) -> str:
-    q = _load_questions()[q_key]
-    return q.get("question", "")
+    questions = _load_questions()
+    idx = int(q_key)
+    if idx < 0 or idx >= len(questions):
+        return ""
+    return questions[idx].get("question", "")
 
 
 def get_question_full(q_key: str) -> dict[str, Any]:
-    return _load_questions()[q_key]
+    questions = _load_questions()
+    idx = int(q_key)
+    if idx < 0 or idx >= len(questions):
+        return {}
+    return questions[idx]
 
 
 def is_candidate(user_id: int, username: str | None) -> bool:
@@ -178,7 +170,7 @@ async def handle_answer(
     message_text: str,
 ) -> tuple[str, bool]:
     """
-    Обработать ответ на вопрос. Вызов LLM через asyncio.to_thread.
+    Обработать ответ на вопрос через validate_answer.
     Возвращает (текст ответа бота, закончена_ли сессия).
     """
     state = _state.get(user_id)
@@ -195,48 +187,27 @@ async def handle_answer(
     q_key = keys[idx]
     q_full = get_question_full(q_key)
     question_text = q_full.get("question", "")
-    question_title = q_full.get("title", q_key)
-    criteria = q_full.get("criteria", [])
-    criteria_list = "\n".join(f"- {c}" for c in criteria)
+    acceptance_criteria = q_full.get("acceptance", "")
 
-    template = _load_prompt_template()
-    template_head, template_data = template.split("----- cut -----")
-
-    prompt_data = template_data.format(
-        question_title=question_title,
-        question_text=question_text,
-        candidate_answer=message_text,
-        criteria_list=criteria_list,
+    valid, human_response = await asyncio.to_thread(
+        openai_client.validate_answer,
+        question_text,
+        message_text,
+        acceptance_criteria,
     )
-    
-    prompt = f"{template_head}\n{prompt_data}"
-
-    raw = await asyncio.to_thread(openai_client.get_completion, prompt)
-    try:
-        parsed = _parse_llm_json(raw)
-    except (json.JSONDecodeError, KeyError) as e:
-        log.exception("LLM JSON parse error: %s", e)
-        return ("Произошла ошибка при оценке ответа. Пожалуйста, ответьте ещё раз.", False)
-
-    profanity = parsed.get("profanity_detected", False)
-    compliance_percent = int(parsed.get("compliance_percent", 0))
-    summary_comment = parsed.get("summary_comment", "") or ""
 
     state["report"].append({
         "q_number": q_key,
         "question": question_text,
         "answer": message_text,
-        "compliance_percent": compliance_percent,
-        "comment": summary_comment,
-        "profanity_detected": profanity,
+        "compliance_percent": 100 if valid else 0,
+        "comment": human_response if not valid else "",
+        "profanity_detected": False,
+        "invalid": not valid,
     })
 
-    if profanity:
-        state["red_flags"] = state.get("red_flags", 0) + 1
-        if state["red_flags"] > 1:
-            state["state"] = "early_exit"
-            return (GOODBYE_EARLY, True)
-        return (REPEAT_ANSWER, False)
+    if not valid:
+        return (human_response or REPEAT_ANSWER, False)
 
     state["current_q_index"] = idx + 1
     if state["current_q_index"] >= len(keys):
@@ -247,6 +218,10 @@ async def handle_answer(
     next_q = get_question_text(next_q_key)
     num = state["current_q_index"] + 1
     return (f"Вопрос {num}.\n{next_q}", False)
+
+
+
+
 
 
 def build_questionnaire_result_from_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -266,7 +241,7 @@ def build_questionnaire_result_from_state(state: dict[str, Any]) -> dict[str, An
             questions_dict[qn]["answer"] = r["answer"]
             questions_dict[qn]["compliance"] = r["compliance_percent"]
             questions_dict[qn]["comment"] = r.get("comment") or ""
-        if r.get("profanity_detected"):
+        if r.get("profanity_detected") or r.get("invalid"):
             questions_dict[qn]["rejected_answer"] = r["answer"]
 
     profanity_detected = state.get("red_flags", 0) > 1 or any(
