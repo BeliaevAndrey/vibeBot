@@ -292,7 +292,6 @@ async def dump_result_and_save_text(
         lines.append(f"Ответ: {q_data.get('answer', '')}")
         if q_data.get("rejected_answer"):
             lines.append(f"Некорректный ответ (red_flag): {q_data['rejected_answer']}")
-        lines.append(f"Соответствие: {q_data.get('compliance', 0)}%")
         if q_data.get("comment"):
             lines.append(f"Комментарий: {q_data['comment']}")
         lines.append("")
@@ -308,6 +307,16 @@ async def dump_result_and_save_text(
             await client.send_message(HR_ACCOUNT, text_body)
         except Exception as e:
             log.exception("Send to HR failed: %s", e)
+            print(f"Отчёт не отправлен HR_ACCOUNT={HR_ACCOUNT}: {e}")
+        else:
+            print(f"Отчёт отправлен HR_ACCOUNT={HR_ACCOUNT}")
+    else:
+        if not send_to_hr:
+            print("Отчёт не отправлен: отправка отключена (send_to_hr=False)")
+        elif not HR_ACCOUNT:
+            print("Отчёт не отправлен: не задан HR_ACCOUNT")
+        elif not client:
+            print("Отчёт не отправлен: клиент Telegram не инициализирован")
 
     return str(text_path)
 
