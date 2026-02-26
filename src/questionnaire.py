@@ -90,6 +90,17 @@ def _ensure_results_dirs() -> None:
     RESULTS_TEXT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _format_report_date(iso_date: str | None) -> str:
+    """Преобразовать дату из ISO в вид 'YYYY-mm-dd HH:MM (МСК)' для отчёта."""
+    if not iso_date:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso_date.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M") + " (МСК)"
+    except (ValueError, TypeError):
+        return iso_date or "—"
+
+
 def get_greeting(candidate_username: str | None = None) -> str:
     """
     Случайное приветствие с подстановкой плейсхолдеров.
@@ -231,10 +242,6 @@ async def handle_answer(
     return (f"Вопрос {num}.\n{next_q}", False)
 
 
-
-
-
-
 def build_questionnaire_result_from_state(state: dict[str, Any]) -> dict[str, Any]:
     """Собрать итоговый словарь questionnaire_result из state."""
     report = state.get("report", [])
@@ -288,7 +295,7 @@ async def dump_result_and_save_text(
 
     lines = [
         f"Опросник: {result.get('user')}",
-        f"Дата: {result.get('date')}",
+        f"Дата: {_format_report_date(result.get('date'))}",
         "",
     ]
     if result.get("profanity_detected"):
@@ -296,7 +303,8 @@ async def dump_result_and_save_text(
         lines.append("")
 
     for q_num, q_data in result.get("questions", {}).items():
-        lines.append(f"Вопрос {q_num}: {q_data.get('question', '')}")
+        num_display = int(q_num) + 1 if str(q_num).isdigit() else q_num
+        lines.append(f"Вопрос {num_display}: {q_data.get('question', '')}")
         lines.append(f"Ответ: {q_data.get('answer', '')}")
         if q_data.get("rejected_answer"):
             lines.append(f"Некорректный ответ (red_flag): {q_data['rejected_answer']}")
@@ -327,8 +335,6 @@ async def dump_result_and_save_text(
         except Exception as e:
             log.exception("Send to HR failed: %s", e)
             print(f"Отчёт не отправлен HR_ACCOUNT={HR_ACCOUNT}: {e}")
-        else:
-            print(f"Отчёт отправлен HR_ACCOUNT={HR_ACCOUNT}")
     else:
         if not send_to_hr:
             print("Отчёт не отправлен: отправка отключена (send_to_hr=False)")
@@ -356,22 +362,27 @@ async def dump_result_and_save_text(
     # Автозагрузка вакансий по short: отчёт топ-3 — в HR напрямую; сохранение в файл только для истории
     if short is not None and VACANCY_API_KEY and HR_ACCOUNT and client:
         try:
-            def _fetch_and_report() -> tuple[list, str | None]:
+            def _fetch_and_report() -> tuple[list, str | None, int]:
                 places_resp = get_places()
                 places = places_resp.get("data", [])
                 flat = filter_from_short(short, places)
                 if not flat:
-                    return [], None
+                    return [], None, 0
                 filter_dict = generate_filter(flat)
                 raw = get_job_offerings(filter_dict=filter_dict)
                 offerings = enrich_offerings(raw, places)
+                meta = raw.get("meta") or {}
+                total_count = meta.get("totalCount") or len(offerings)
                 report = format_top_vacancies_report(offerings, top_n=3) if offerings else None
-                return offerings, report
+                return offerings, report, total_count
 
-            offerings, report_text = await asyncio.to_thread(_fetch_and_report)
+            offerings, report_text, total_count = await asyncio.to_thread(_fetch_and_report)
+            total_line = f"Всего найдено вакансий: {total_count}"
+            print(total_line)
             if report_text:
-                await client.send_message(HR_ACCOUNT, report_text)
-                print("Отчёт по вакансиям (топ-3) отправлен в HR_ACCOUNT")
+                full_report = total_line + "\n\n" + report_text
+                await client.send_message(HR_ACCOUNT, full_report)
+                print(f"Отчёт по вакансиям (топ-3) отправлен {HR_ACCOUNT}")
             if SAVE_RESULTS_TO_FILES and offerings:
                 vac_path = RESULTS_JSON_DIR / f"vacancies_{user_label}_{safe_ts}.json"
                 try:
