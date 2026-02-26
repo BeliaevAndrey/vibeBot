@@ -200,7 +200,6 @@ async def handle_answer(
         "q_number": q_key,
         "question": question_text,
         "answer": message_text,
-        "compliance_percent": 100 if valid else 0,
         "comment": human_response if not valid else "",
         "profanity_detected": False,
         "invalid": not valid,
@@ -234,13 +233,13 @@ def build_questionnaire_result_from_state(state: dict[str, Any]) -> dict[str, An
             questions_dict[qn] = {
                 "question": r["question"],
                 "answer": r["answer"],
-                "compliance": r["compliance_percent"],
-                "comment": r.get("comment") or "",
             }
         else:
             questions_dict[qn]["answer"] = r["answer"]
-            questions_dict[qn]["compliance"] = r["compliance_percent"]
-            questions_dict[qn]["comment"] = r.get("comment") or ""
+        # comment добавляем только если он непустой
+        comment = r.get("comment") or ""
+        if comment:
+            questions_dict[qn]["comment"] = comment
         if r.get("profanity_detected") or r.get("invalid"):
             questions_dict[qn]["rejected_answer"] = r["answer"]
 
@@ -317,6 +316,20 @@ async def dump_result_and_save_text(
             print("Отчёт не отправлен: не задан HR_ACCOUNT")
         elif not client:
             print("Отчёт не отправлен: клиент Telegram не инициализирован")
+
+    # Короткая выжимка для parser
+    try:
+        short = await asyncio.to_thread(openai_client.summarize_questionnaire, result)
+    except Exception as e:
+        log.exception("Short summary failed: %s", e)
+    else:
+        short_path = _RESULTS_JSON_DIR / "short.json"
+        try:
+            with open(short_path, "w", encoding="utf-8") as f:
+                json.dump(short, f, ensure_ascii=False, indent=2)
+            print("Краткая выжимка опроса:", short)
+        except Exception as e:
+            log.exception("Save short summary failed: %s", e)
 
     return str(text_path)
 
