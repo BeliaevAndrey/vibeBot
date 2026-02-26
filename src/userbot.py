@@ -4,6 +4,7 @@ UserBot — учётная запись Telegram, опросник с OpenAI.
 """
 
 import asyncio
+import logging
 from telethon.sync import TelegramClient
 from telethon import events
 from telethon.errors import (
@@ -12,22 +13,23 @@ from telethon.errors import (
     FloodWaitError,
 )
 
-from config import API_ID, API_HASH, PHONE, CANDIDATE_USERNAME
+from config import TG_API_ID, TG_API_HASH, TG_PHONE, CANDIDATE_USERNAME, setup_logging
 from . import questionnaire
-from .logger import setup
 
 SESSION_NAME = "userbot_session"
-log = setup()
+setup_logging()
+log = logging.getLogger("userbot")
 
 
 def run_userbot() -> None:
     """Запуск UserBot: приветствие кандидату, затем опросник по входящим ЛС."""
-    client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    client = TelegramClient(SESSION_NAME, TG_API_ID, TG_API_HASH)
 
     try:
         try:
-            client.start(phone=PHONE)
+            client.start(phone=TG_PHONE)
         except SessionPasswordNeededError:
+            log.warning("Требуется пароль 2FA")
             client.sign_in(password=input("Введите пароль 2FA: "))
         me = client.get_me()
         print(f"Авторизован: {me.first_name} (@{me.username})")
@@ -99,6 +101,7 @@ def run_userbot() -> None:
         log.error("FloodWait: %s секунд", e.seconds)
         print(f"Ожидание {e.seconds} с (ограничение Telegram).")
     except KeyboardInterrupt:
+        log.info("Остановлено по Ctrl+C")
         print("\nОстановлено.")
     except Exception as e:
         log.exception("Неожиданная ошибка")

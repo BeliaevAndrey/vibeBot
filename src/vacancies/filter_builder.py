@@ -1,7 +1,9 @@
-import datetime
+import logging
 from typing import Any, Dict, List
 
 from .utils import swap
+
+_log = logging.getLogger("userbot")
 
 
 TRANSLATE: Dict[str, str] = {
@@ -26,7 +28,6 @@ TRANSLATE: Dict[str, str] = {
 
 
 POSSIBLE_FILTERS: Dict[str, Any] = {
-    # Возраст (текущий) — на его основе строятся условия по f_min_age и f_offering_max_age
     "current_age": None,
     "f_offering_gender": None,
     "f_offering_offering": None,
@@ -36,7 +37,6 @@ POSSIBLE_FILTERS: Dict[str, Any] = {
 }
 
 
-# Код -> название; для выбора по номеру используем список (код, название)
 GENDERS: Dict[str, str] = {"08i2iwrzqi2": "женщина", "q3slmijbifh": "мужчина"}
 GENDER_CHOICES: List[tuple[str, str]] = [
     ("q3slmijbifh", "мужчина"),
@@ -62,25 +62,7 @@ NATIONALITY: Dict[str, str] = {
 
 def generate_filter(filters: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Построение фильтра в формате, максимально приближенном к примеру из браузера.
-
-    Структура целевого фильтра:
-    {
-        "$and": [
-            {
-                "$and": [
-                    { ... основные условия ... },
-                    { "f_offering_city": { "id": { "$eq": <region_id> } } },
-                    ...
-                ]
-            },
-            {
-                "$and": [
-                    { "f_offering_status": { "$eq": "2vi89elxqk9" } }
-                ]
-            }
-        ]
-    }
+    Построение фильтра в формате API.
     """
     main_conditions: List[Dict[str, Any]] = []
 
@@ -88,44 +70,32 @@ def generate_filter(filters: Dict[str, Any]) -> Dict[str, Any]:
         if value is None:
             continue
 
-        # Возраст: добавляем два условия
-        # f_min_age <= current_age и f_offering_max_age >= current_age
         if key == "current_age" and isinstance(value, int):
             main_conditions.append({"f_min_age": {"$lte": value}})
             main_conditions.append({"f_offering_max_age": {"$gte": value}})
             continue
 
-        # Область: как в примере из браузера — через f_offering_city.id.$eq
         if key == "f_778clr1gcvp" and isinstance(value, int):
             main_conditions.append(
                 {
                     "f_offering_city": {
-                        "id": {
-                            "$eq": value,
-                        }
+                        "id": {"$eq": value},
                     }
                 }
             )
             continue
 
-        # Числа (возраст, количество и т.п.) — как в примере: $gte
         if isinstance(value, int):
             main_conditions.append({key: {"$gte": value}})
-        # Строки (даты в ISO и пр.) — тоже через $gte
         elif isinstance(value, str):
             main_conditions.append({key: {"$gte": value}})
-        # Списки кодов: национальность, пол, категория, тип оплаты и др.
         elif isinstance(value, list):
-            # Категория работы в примере идёт через "$in"
             if key == "f_offering_offering":
                 main_conditions.append({key: {"$in": value}})
-            # Тип оплаты выбирается в единственном варианте — используем "$eq"
             elif key == "f_offering_rate" and len(value) == 1:
                 main_conditions.append({key: {"$eq": value[0]}})
-            # Пол: добавляем ограничение по количеству людей этого пола
             elif key == "f_offering_gender":
                 main_conditions.append({key: {"$anyOf": value}})
-                # мужской код: "q3slmijbifh", женский: "08i2iwrzqi2"
                 if "q3slmijbifh" in value:
                     main_conditions.append({"f_offering_men_needed": {"$gte": 1}})
                 if "08i2iwrzqi2" in value:
@@ -133,14 +103,9 @@ def generate_filter(filters: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 main_conditions.append({key: {"$anyOf": value}})
 
-    # "Хвост" со статусом — отдельный $and, как в запросе из браузера
     status_block = {
         "$and": [
-            {
-                "f_offering_status": {
-                    "$eq": "2vi89elxqk9",
-                }
-            }
+            {"f_offering_status": {"$eq": "2vi89elxqk9"}}
         ]
     }
 
@@ -152,24 +117,59 @@ def generate_filter(filters: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_date_time() -> str | None:
-    prompt = "Введите дату в формате YYYY-MM-DD:\n_> "
-    date_string = input(prompt)
-    try:
-        date_filter = datetime.datetime.strptime(date_string, "%Y-%m-%d")
-        return date_filter.isoformat()
-    except ValueError:
-        print("Неверно введена дата. Проверьте формат: ГОД-МЕСЯЦ-ЧИСЛО")
+def filter_from_short(short: Dict[str, Any], places: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    """
+    Построить плоский словарь условий для generate_filter из выжимки опроса (short).
+    short: full_name, gender, birth_date, age, job_type, region (и др.).
+    places: список из get_places()["data"].
+    Возвращает None, если нет ни одного применимого условия (например, регион не найден и остальное пусто).
+    """
+    filters: Dict[str, Any] = {}
+
+    # Регион: short["region"] — строка, ищем в places по f_places_name
+    region_name = short.get("region") if isinstance(short.get("region"), str) else None
+    if region_name and places:
+        for p in places:
+            if p.get("f_places_name") == region_name:
+                place_id = p.get("id")
+                if isinstance(place_id, int):
+                    filters["f_778clr1gcvp"] = place_id
+                break
+
+    # Пол: short["gender"] — "мужчина" / "женщина"
+    gender_label = short.get("gender") if isinstance(short.get("gender"), str) else None
+    if gender_label:
+        rev = swap(GENDERS)
+        code = rev.get(gender_label.strip())
+        if code:
+            filters["f_offering_gender"] = [code]
+
+    # Возраст
+    age = short.get("age")
+    if isinstance(age, int) and age > 0:
+        filters["current_age"] = age
+
+    # Категория (job_type): short["job_type"] — строка, маппим через CATEGORY
+    job_type = short.get("job_type") if isinstance(short.get("job_type"), str) else None
+    if job_type and job_type.strip():
+        rev_cat = swap(CATEGORY)
+        code = rev_cat.get(job_type.strip())
+        if code:
+            filters["f_offering_offering"] = [code]
+
+    if not filters:
         return None
+    return filters
 
 
 def get_int() -> int:
+    """Ввод целого числа с повтором при неверном вводе (без try/except)."""
     prompt = "Введите целое число:\n_> "
     while True:
-        try:
-            return int(input(prompt))
-        except ValueError:
-            print("Введите, пожалуйста, число.")
+        s = input(prompt).strip()
+        if s.lstrip("-").isdigit() and s not in ("", "-"):
+            return int(s)
+        print("Введите, пожалуйста, число.")
 
 
 def choose_places(places: list[dict[str, Any]]) -> int:
@@ -237,8 +237,7 @@ def choose_rate() -> list[str]:
 
 def choose_filters(places: list[dict[str, Any]]) -> Dict[str, Any]:
     """
-    Интерактивный выбор фильтров. Возвращает словарь полей и значений,
-    который затем передаётся в generate_filter.
+    Интерактивный выбор фильтров. Возвращает словарь полей и значений для generate_filter.
     """
     filters: Dict[str, Any] = {}
     filters_list: List[str] = list(POSSIBLE_FILTERS.keys())
@@ -249,12 +248,8 @@ def choose_filters(places: list[dict[str, Any]]) -> Dict[str, Any]:
             print(f"{idx}.\t{TRANSLATE.get(key, key)}")
         print("0.\tЗавершить")
 
-        try:
-            filter_num = int(input("Введите номер фильтра: "))
-        except ValueError:
-            print("Введите, пожалуйста, число.")
-            continue
-
+        filter_num = get_int()
+        
         if filter_num == 0:
             return filters
         if filter_num < 0 or filter_num > len(filters_list):
@@ -276,4 +271,3 @@ def choose_filters(places: list[dict[str, Any]]) -> Dict[str, Any]:
                 filters[key] = choose_nationality()
             case "f_offering_rate":
                 filters[key] = choose_rate()
-

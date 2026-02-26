@@ -4,22 +4,34 @@
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone, timedelta
-from pathlib import Path
 from typing import Any
 
-from config import HR_ACCOUNT, CANDIDATE_USERNAME
+from config import (
+    HR_ACCOUNT,
+    CANDIDATE_USERNAME,
+    SAVE_RESULTS_TO_FILES,
+    VACANCY_API_KEY,
+    GREETINGS_PATH,
+    COMPANY_DATA_PATH,
+    QUESTIONS_PATH,
+    RESULTS_JSON_DIR,
+    RESULTS_TEXT_DIR,
+    setup_logging,
+)
 from . import openai_client
-from .logger import get_logger
+from .vacancies import (
+    enrich_offerings,
+    filter_from_short,
+    format_top_vacancies_report,
+    generate_filter,
+    get_job_offerings,
+    get_places,
+)
 
-log = get_logger()
-
-_RESOURCE_DIR = Path(__file__).resolve().parent.parent / "resource"
-_GREETINGS_PATH = _RESOURCE_DIR / "json" / "greetings.json"
-_COMPANY_DATA_PATH = _RESOURCE_DIR / "json" / "company_data.json"
-_QUESTIONS_PATH = _RESOURCE_DIR / "json" / "questions.json"
-_RESULTS_JSON_DIR = Path("questionnaire_results") / "json"
-_RESULTS_TEXT_DIR = Path("questionnaire_results") / "text"
+setup_logging()
+log = logging.getLogger("userbot")
 
 UTC_PLUS_3 = timezone(timedelta(hours=3))
 
@@ -34,7 +46,7 @@ REPEAT_ANSWER = "Пожалуйста, ответьте ещё раз, избе�
 
 def _load_greetings() -> list[str]:
     """Загрузить приветствия: файл — объект {"1": текст, "2": текст, ...}, возвращаем список текстов."""
-    with open(_GREETINGS_PATH, encoding="utf-8") as f:
+    with open(GREETINGS_PATH, encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, dict):
         return list(data.values())
@@ -43,7 +55,7 @@ def _load_greetings() -> list[str]:
 
 def _load_company_data() -> dict[str, str]:
     """Загрузить company_data.json (company, position, hr_name)."""
-    with open(_COMPANY_DATA_PATH, encoding="utf-8") as f:
+    with open(COMPANY_DATA_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -68,14 +80,14 @@ def _substitute_greeting_placeholders(text: str, candidate_username: str | None 
 
 def _load_questions() -> list[dict[str, Any]]:
     """Вопросы: массив [ {"question": "...", "acceptance": "..."}, ... ]."""
-    with open(_QUESTIONS_PATH, encoding="utf-8") as f:
+    with open(QUESTIONS_PATH, encoding="utf-8") as f:
         data = json.load(f)
     return data if isinstance(data, list) else list(data.values()) if isinstance(data, dict) else []
 
 
 def _ensure_results_dirs() -> None:
-    _RESULTS_JSON_DIR.mkdir(parents=True, exist_ok=True)
-    _RESULTS_TEXT_DIR.mkdir(parents=True, exist_ok=True)
+    RESULTS_JSON_DIR.mkdir(parents=True, exist_ok=True)
+    RESULTS_TEXT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def get_greeting(candidate_username: str | None = None) -> str:
@@ -272,10 +284,7 @@ async def dump_result_and_save_text(
     user_label = result.get("user", "unknown").replace("@", "")
     now = datetime.now(UTC_PLUS_3)
     ts = now.strftime("%Y_%m_%d-%H_%M")
-
-    json_path = _RESULTS_JSON_DIR / f"{user_label}_{ts.replace('-', '_')}.json"
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    safe_ts = ts.replace("-", "_")
 
     lines = [
         f"Опросник: {result.get('user')}",
@@ -297,9 +306,20 @@ async def dump_result_and_save_text(
 
     text_body = "\n".join(lines)
     text_filename = f"{user_label}_{ts}.txt"
-    text_path = _RESULTS_TEXT_DIR / text_filename
-    with open(text_path, "w", encoding="utf-8") as f:
-        f.write(text_body)
+    text_path = RESULTS_TEXT_DIR / text_filename
+
+    if SAVE_RESULTS_TO_FILES:
+        json_path = RESULTS_JSON_DIR / f"{user_label}_{safe_ts}.json"
+        try:
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log.exception("Save questionnaire JSON failed: %s", e)
+        try:
+            with open(text_path, "w", encoding="utf-8") as f:
+                f.write(text_body)
+        except Exception as e:
+            log.exception("Save questionnaire TXT failed: %s", e)
 
     if send_to_hr and HR_ACCOUNT and client:
         try:
@@ -317,19 +337,50 @@ async def dump_result_and_save_text(
         elif not client:
             print("Отчёт не отправлен: клиент Telegram не инициализирован")
 
-    # Короткая выжимка для parser
+    # Короткая выжимка (short) — передаём напрямую в загрузку вакансий; сохранение в файл только для истории
+    short = None
     try:
         short = await asyncio.to_thread(openai_client.summarize_questionnaire, result)
+        print("Краткая выжимка опроса:", short)
     except Exception as e:
         log.exception("Short summary failed: %s", e)
-    else:
-        short_path = _RESULTS_JSON_DIR / "short.json"
+
+    if SAVE_RESULTS_TO_FILES and short is not None:
         try:
+            short_path = RESULTS_JSON_DIR / f"short_{user_label}_{safe_ts}.json"
             with open(short_path, "w", encoding="utf-8") as f:
                 json.dump(short, f, ensure_ascii=False, indent=2)
-            print("Краткая выжимка опроса:", short)
         except Exception as e:
             log.exception("Save short summary failed: %s", e)
+
+    # Автозагрузка вакансий по short: отчёт топ-3 — в HR напрямую; сохранение в файл только для истории
+    if short is not None and VACANCY_API_KEY and HR_ACCOUNT and client:
+        try:
+            def _fetch_and_report() -> tuple[list, str | None]:
+                places_resp = get_places()
+                places = places_resp.get("data", [])
+                flat = filter_from_short(short, places)
+                if not flat:
+                    return [], None
+                filter_dict = generate_filter(flat)
+                raw = get_job_offerings(filter_dict=filter_dict)
+                offerings = enrich_offerings(raw, places)
+                report = format_top_vacancies_report(offerings, top_n=3) if offerings else None
+                return offerings, report
+
+            offerings, report_text = await asyncio.to_thread(_fetch_and_report)
+            if report_text:
+                await client.send_message(HR_ACCOUNT, report_text)
+                print("Отчёт по вакансиям (топ-3) отправлен в HR_ACCOUNT")
+            if SAVE_RESULTS_TO_FILES and offerings:
+                vac_path = RESULTS_JSON_DIR / f"vacancies_{user_label}_{safe_ts}.json"
+                try:
+                    with open(vac_path, "w", encoding="utf-8") as f:
+                        json.dump(offerings, f, ensure_ascii=False, indent=2)
+                except Exception as e:
+                    log.exception("Save vacancies.json failed: %s", e)
+        except Exception as e:
+            log.exception("Vacancy fetch/report failed: %s", e)
 
     return str(text_path)
 

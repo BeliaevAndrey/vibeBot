@@ -129,31 +129,6 @@ def summarize_questionnaire(result: Dict[str, Any]) -> Dict[str, Any]:
     """
     client = OpenAI(api_key=OPENAI_API_KEY)
 
-    # system_prompt = (
-    #     "Ты HR-специалист. На вход ты получаешь JSON с результатами опроса кандидата"
-    #     " (вопросы и ответы). Твоя задача — вытащить структурированную выжимку."
-    #     "\n\nПравила:\n"
-    #     "- Определи ФИО кандидата (если есть) в человеко-читаемом виде.\n"
-    #     "- Определи пол ТОЛЬКО на основе ФИО или явно указанного пола.\n"
-    #     "  Если уверенность ниже 0.9 — gender должен быть null.\n"
-    #     "- Определи дату рождения birth_date в формате YYYY-MM-DD (ISO).\n"
-    #     "  Если известен только год — используй 01-01 этого года.\n"
-    #     "  Если информации недостаточно — birth_date должен быть null.\n"
-    #     "- Определи тип работы: 'склад' или 'производство', только если это явно следует из ответов.\n"
-    #     "  Иначе job_type = null.\n"
-    #     "- Определи регион проживания (город/регион), если есть.\n"
-    #     "- Если информации для поля недостаточно — ставь null.\n"
-    #     "\nФормат ответа: только JSON-объект без лишнего текста, строго вида:\n"
-    #     "{\n"
-    #     '  "full_name": string | null,\n'
-    #     '  "gender": "мужчина" | "женщина" | null,\n'
-    #     '  "birth_date": string | null,\n'
-    #     '  "age": number | null,\n'
-    #     '  "job_type": "склад" | "производство" | null,\n'
-    #     '  "region": string | null\n'
-    #     "}\n"
-    # )
-
     user_content = (
         "Вот полный JSON результата опроса кандидата.\n"
         "Сформируй выжимку по правилам из системного сообщения.\n\n"
@@ -257,6 +232,9 @@ def summarize_questionnaire(result: Dict[str, Any]) -> Dict[str, Any]:
         )
         tool_calls = resp.choices[0].message.tool_calls
         if not tool_calls:
+            logging.getLogger("userbot").error(
+                "summarize_questionnaire: no tool_calls in response"
+            )
             raise ValueError("summarize_questionnaire: no tool_calls in response")
         args_json = tool_calls[0].function.arguments
         data = json.loads(args_json)
@@ -282,7 +260,10 @@ def summarize_questionnaire(result: Dict[str, Any]) -> Dict[str, Any]:
             age = today.year - dt.year - (
                 (today.month, today.day) < (dt.month, dt.day)
             )
-        except ValueError:
+        except ValueError as e:
+            logging.getLogger("userbot").exception(
+                "summarize_questionnaire: неверный birth_date: %s", e
+            )
             birth_date_iso = None
             age = None
 

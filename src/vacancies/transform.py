@@ -1,6 +1,7 @@
 from typing import Any, Dict, List
 
 from bs4 import BeautifulSoup
+import logging
 
 from .filter_builder import (
     CATEGORY,
@@ -29,47 +30,37 @@ def enrich_offerings(
 ) -> List[Dict[str, Any]]:
     """
     Обогащает вакансии дополнительной человеко-читаемой информацией.
-
-    - Сохраняет нативные ключи API без переименования.
-    - Добавляет *_human поля (gender_human, category_human, rate_human, nationality_human, region_name, description_text).
     """
     offerings: List[Dict[str, Any]] = []
     places_index = _build_places_index(places or [])
 
     for vacancy in raw_data.get("data", []):
-        # Копируем все нативные поля как есть
         item: Dict[str, Any] = dict(vacancy)
 
-        # Пол
         genders_needed = vacancy.get("f_offering_gender") or []
         if genders_needed:
             item["gender_human"] = ", ".join(
                 [GENDERS.get(code, code) for code in genders_needed]
             )
 
-        # Национальность
         nationals = vacancy.get("f_offering_nationality") or []
         if nationals:
             item["nationality_human"] = [
                 NATIONALITY.get(code, code) for code in nationals
             ]
 
-        # Категория
         category_code = vacancy.get("f_offering_offering")
         if category_code:
             item["category_human"] = CATEGORY.get(category_code, category_code)
 
-        # Тип оплаты
         rate_code = vacancy.get("f_offering_rate")
         if rate_code:
             item["rate_human"] = OFFERING_RATE.get(rate_code, rate_code)
 
-        # Регион (название)
         region_id = vacancy.get("f_778clr1gcvp")
         if isinstance(region_id, int):
             item["region_name"] = places_index.get(region_id, f"Область {region_id}")
 
-        # Описание из HTML (поле может быть None, не строка или битый HTML)
         desc_html = vacancy.get("f_offering_new_description")
         if desc_html is None or not isinstance(desc_html, str):
             item["description_text"] = ""
@@ -77,7 +68,10 @@ def enrich_offerings(
             try:
                 soup = BeautifulSoup(desc_html, "html5lib")
                 item["description_text"] = soup.get_text(separator="\n", strip=True)
-            except Exception:
+            except Exception as e:
+                logging.getLogger("userbot").exception(
+                    "Ошибка парсинга описания вакансии (HTML): %s", e
+                )
                 item["description_text"] = desc_html
 
         offerings.append(item)
@@ -95,11 +89,58 @@ def _shorten_description(text: str, max_len: int = 100) -> str:
     return one_line[:max_len].rstrip() + "..."
 
 
+def format_top_vacancies_report(
+    offerings: List[Dict[str, Any]],
+    top_n: int = 3,
+    description_max_len: int = 120,
+) -> str:
+    """
+    Формирует человеко-читаемый отчёт по топ-N вакансиям для отправки в HR.
+    Поля: id, f_offering_name, Вакансия от (updatedAt или createdAt), region_name,
+    gender_human, nationality_human, category_human, rate_human, description_text.
+    """
+    lines = ["Вакансии по кандидату (топ-3)", ""]
+    for idx, item in enumerate(offerings[:top_n], start=1):
+        name = item.get("f_offering_name") or "—"
+        lines.append(f"{idx}. {name}")
+
+        vid = item.get("id")
+        lines.append(f"ID вакансии: {vid if vid is not None else '—'}")
+
+        date_val = item.get("updatedAt") if item.get("updatedAt") is not None else item.get("createdAt")
+        lines.append(f"Вакансия от: {date_val if date_val is not None else '—'}")
+
+        region = item.get("region_name") or "—"
+        lines.append(f"Регион: {region}")
+
+        gender = item.get("gender_human") or "—"
+        nat = item.get("nationality_human")
+        if isinstance(nat, list):
+            nat_str = ", ".join(str(x) for x in nat) if nat else "—"
+        else:
+            nat_str = nat if nat else "—"
+        lines.append(f"Пол: {gender}. Гражданство: {nat_str}")
+
+        cat = item.get("category_human") or "—"
+        rate = item.get("rate_human") or "—"
+        lines.append(f"Категория: {cat}. Оплата: {rate}")
+
+        desc = item.get("description_text") or ""
+        if desc:
+            lines.append(f"Описание: {_shorten_description(desc, description_max_len)}")
+        else:
+            lines.append("Описание: —")
+
+        lines.append("")
+        if idx < min(len(offerings), top_n):
+            lines.append("---")
+            lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
 def print_offerings(offerings: List[Dict[str, Any]], limit: int = 10) -> None:
-    """
-    Печатает в консоль только человеко-читаемый текст по вакансиям.
-    Описание в консоли сокращается до 100 символов с многоточием.
-    """
+    """Печатает в консоль человеко-читаемый текст по вакансиям."""
     for idx, item in enumerate(offerings[:limit], start=1):
         print(f"=== Вакансия #{idx} (ID={item.get('id')}) ===")
         print(f"{TRANSLATE['f_offering_name']}: {item.get('f_offering_name')}")
@@ -119,4 +160,3 @@ def print_offerings(offerings: List[Dict[str, Any]], limit: int = 10) -> None:
         desc = item.get("description_text") or ""
         print(f"{TRANSLATE['f_offering_new_description']}: {_shorten_description(desc)}")
         print("\n" + "=" * 40 + "\n")
-

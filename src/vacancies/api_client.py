@@ -1,12 +1,17 @@
 import json
-import os
+import logging
 from typing import Any, Dict, Optional
 
 import requests
 
+try:
+    from config import VACANCY_API_KEY, VACANCY_API_URL
+except ImportError:
+    import os
+    VACANCY_API_URL = os.environ.get("VACANCY_API_URL", "https://platform.vaxtarekrut.ru/api/")
+    VACANCY_API_KEY = os.environ.get("VACANCY_API_KEY", "")
 
-VACANCY_API_URL = os.getenv("VACANCY_API_URL", "https://platform.vaxtarekrut.ru/api/")
-VACANCY_API_KEY = os.getenv("VACANCY_API_KEY")
+_log = logging.getLogger("userbot")
 
 JOBS_DATA = "t_job_offerings"
 JOBS_PLACES = "t_places"
@@ -14,7 +19,9 @@ JOBS_PLACES = "t_places"
 
 def _get_headers() -> Dict[str, str]:
     if not VACANCY_API_KEY:
-        raise RuntimeError("VACANCY_API_KEY не установлен. Загрузите переменные окружения из .env.")
+        msg = "VACANCY_API_KEY не установлен. Загрузите переменные окружения из .env."
+        _log.error(msg)
+        raise RuntimeError(msg)
     return {
         "Authorization": f"Bearer {VACANCY_API_KEY}",
         "Accept": "application/json",
@@ -50,4 +57,3 @@ def get_job_offerings(
     resp = requests.get(url, headers=_get_headers(), params=params, timeout=60)
     resp.raise_for_status()
     return resp.json()
-
