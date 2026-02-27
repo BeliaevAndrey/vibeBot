@@ -34,6 +34,11 @@ VACANCY_API_KEY = os.environ.get("VACANCY_API_KEY", "")
 # При "0"/"false" все сохранения (questionnaire result json/txt, short.json, vacancies.json) отключены.
 SAVE_RESULTS_TO_FILES = _truthy(os.environ.get("SAVE_RESULTS_TO_FILES", "1"))
 
+# Режим команд: при True бот ждёт команды в ЛС после аутентификации по паролю (переопределяется из main при --command_mode).
+COMMAND_MODE = _truthy(os.environ.get("COMMAND_MODE", "0"))
+# Пароль для входа в режим команд (проверка при /command_mode).
+COMMAND_MODE_PASSWORD = os.environ.get("COMMAND_MODE_PASSWORD", "")
+
 
 # --- Базовые пути проекта ---
 

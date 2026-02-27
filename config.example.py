@@ -11,4 +11,6 @@
 # export VACANCY_API_KEY=<Bearer-токен>
 # Сохранение в файлы (1/0, по умолчанию 1): questionnaire result json/txt, short.json, vacancies.json
 # export SAVE_RESULTS_TO_FILES=1
+# Режим команд: запуск с --command_mode (см. main.py); пароль для /command_mode в ЛС:
+# export COMMAND_MODE_PASSWORD=<пароль>
 # Плейсхолдеры приветствий: {name}=@username кандидата, остальные — resource/json/company_data.json

@@ -281,6 +281,7 @@ async def dump_result_and_save_text(
     result: dict[str, Any],
     client: Any,
     send_to_hr: bool = True,
+    hr_account: str | None = None,
 ) -> str:
     """
     Дамп questionnaire_result в questionnaire_results/json,
@@ -329,16 +330,17 @@ async def dump_result_and_save_text(
         except Exception as e:
             log.exception("Save questionnaire TXT failed: %s", e)
 
-    if send_to_hr and HR_ACCOUNT and client:
+    hr = (hr_account or HR_ACCOUNT) or ""
+    if send_to_hr and hr and client:
         try:
-            await client.send_message(HR_ACCOUNT, text_body)
+            await client.send_message(hr, text_body)
         except Exception as e:
             log.exception("Send to HR failed: %s", e)
-            print(f"Отчёт не отправлен HR_ACCOUNT={HR_ACCOUNT}: {e}")
+            print(f"Отчёт не отправлен HR_ACCOUNT={hr}: {e}")
     else:
         if not send_to_hr:
             print("Отчёт не отправлен: отправка отключена (send_to_hr=False)")
-        elif not HR_ACCOUNT:
+        elif not hr:
             print("Отчёт не отправлен: не задан HR_ACCOUNT")
         elif not client:
             print("Отчёт не отправлен: клиент Telegram не инициализирован")
@@ -360,7 +362,7 @@ async def dump_result_and_save_text(
             log.exception("Save short summary failed: %s", e)
 
     # Автозагрузка вакансий по short: отчёт топ-3 — в HR напрямую; сохранение в файл только для истории
-    if short is not None and VACANCY_API_KEY and HR_ACCOUNT and client:
+    if short is not None and VACANCY_API_KEY and hr and client:
         try:
             def _fetch_and_report() -> tuple[list, str | None, int]:
                 places_resp = get_places()
@@ -381,8 +383,8 @@ async def dump_result_and_save_text(
             print(total_line)
             if report_text:
                 full_report = total_line + "\n\n" + report_text
-                await client.send_message(HR_ACCOUNT, full_report)
-                print(f"Отчёт по вакансиям (топ-3) отправлен {HR_ACCOUNT}")
+                await client.send_message(hr, full_report)
+                print(f"Отчёт по вакансиям (топ-3) отправлен {hr}")
             if SAVE_RESULTS_TO_FILES and offerings:
                 vac_path = RESULTS_JSON_DIR / f"vacancies_{user_label}_{safe_ts}.json"
                 try:
