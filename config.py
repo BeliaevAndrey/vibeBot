@@ -61,22 +61,29 @@ VACANCY_RESULTS_DIR = BASE_DIR / "results"
 # Логи
 LOG_DIR = BASE_DIR / os.environ.get("LOG_DIR", "logs")
 LOG_FILE = LOG_DIR / os.environ.get("LOG_FILE", "errors.log")
+COMMAND_MODE_LOG_FILE = LOG_DIR / "command_mode.log"
 
 
 def setup_logging() -> None:
     """
     Минимальная настройка логирования:
-    - один файл LOG_FILE
-    - формат: timestamp | LEVEL | message
-    Вызывается по месту (userbot, CLI); idempotent.
+    - root → LOG_FILE (errors.log)
+    - логгер "command_mode" → COMMAND_MODE_LOG_FILE (command_mode.log)
+    Формат: timestamp | LEVEL | message. Idempotent.
     """
     LOG_DIR.mkdir(exist_ok=True)
-    root = logging.getLogger()
-    if root.handlers:
-        return
-    root.setLevel(logging.INFO)
-    fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
     fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-    fh.setFormatter(fmt)
-    root.addHandler(fh)
+    root = logging.getLogger()
+    if not root.handlers:
+        root.setLevel(logging.INFO)
+        fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+    cmd_log = logging.getLogger("command_mode")
+    if not cmd_log.handlers:
+        cmd_log.setLevel(logging.INFO)
+        cmd_log.propagate = False
+        fh_cmd = logging.FileHandler(COMMAND_MODE_LOG_FILE, encoding="utf-8")
+        fh_cmd.setFormatter(fmt)
+        cmd_log.addHandler(fh_cmd)
 

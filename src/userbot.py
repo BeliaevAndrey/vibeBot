@@ -68,6 +68,7 @@ def run_userbot(command_mode: bool = False) -> None:
         "candidate_user_id": None,
     }
 
+    cmd_log = None
     try:
         try:
             client.start(phone=TG_PHONE)
@@ -78,6 +79,9 @@ def run_userbot(command_mode: bool = False) -> None:
         print(f"Авторизован: {me.first_name} (@{me.username})")
 
         candidate_user_id: int | None = None
+        if command_mode:
+            cmd_log = logging.getLogger("command_mode")
+            cmd_log.info("начало сеанса command_mode")
         if not command_mode and CANDIDATE_USERNAME:
             try:
                 entity = client.get_entity(CANDIDATE_USERNAME)
@@ -158,26 +162,38 @@ def run_userbot(command_mode: bool = False) -> None:
                         cmd_state["waiting_for"] = None
                         cmd_state["pending_operator_id"] = None
                         cmd_state["non_command_count"] = -1
+                        sender = await event.get_sender()
+                        op_username = getattr(sender, "username", None)
+                        op_label = f"@{op_username}" if op_username else str(sender_id)
+                        cmd_log.info("operator = %s", op_label)
                         await event.reply(f"Доступ разрешён.\n\n{CMD_LIST}\n\nОжидаю команду.")
                     else:
+                        sender = await event.get_sender()
+                        op_username = getattr(sender, "username", None)
+                        op_label = f"@{op_username}" if op_username else str(sender_id)
+                        cmd_log.warning("неверный пароль, от %s", op_label)
                         cmd_state["waiting_for"] = None
                         cmd_state["pending_operator_id"] = None
                         await event.reply("Неверный пароль.")
                     return
 
                 if waiting == "hr_username" and is_operator:
-                    cmd_state["hr_override"] = _normalize_username(text) or None
+                    hr_val = _normalize_username(text) or None
+                    cmd_state["hr_override"] = hr_val
                     cmd_state["hr_set_this_session"] = True
                     cmd_state["waiting_for"] = None
                     cmd_state["non_command_count"] = -1
+                    cmd_log.info("hr = %s", hr_val or "—")
                     await event.reply("HR установлен.")
                     return
 
                 if waiting == "candidate_username" and is_operator:
-                    cmd_state["candidate_override"] = _normalize_username(text) or None
+                    cand_val = _normalize_username(text) or None
+                    cmd_state["candidate_override"] = cand_val
                     cmd_state["candidate_set_this_session"] = True
                     cmd_state["waiting_for"] = None
                     cmd_state["non_command_count"] = -1
+                    cmd_log.info("candidate = %s", cand_val or "—")
                     await event.reply("Кандидат установлен.")
                     return
 
@@ -318,5 +334,7 @@ def run_userbot(command_mode: bool = False) -> None:
         log.exception("Неожиданная ошибка")
         print(f"Ошибка: {e}")
     finally:
+        if command_mode and cmd_log:
+            cmd_log.info("конец сеанса command_mode")
         client.disconnect()
         print("Клиент отключён.")
