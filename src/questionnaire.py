@@ -13,6 +13,7 @@ from config import (
     CANDIDATE_USERNAME,
     SAVE_RESULTS_TO_FILES,
     VACANCY_API_KEY,
+    VACANCY_TOP_N,
     GREETINGS_PATH,
     COMPANY_DATA_PATH,
     QUESTIONS_PATH,
@@ -282,11 +283,13 @@ async def dump_result_and_save_text(
     client: Any,
     send_to_hr: bool = True,
     hr_account: str | None = None,
+    candidate_entity: int | str | None = None,
 ) -> str:
     """
     Дамп questionnaire_result в questionnaire_results/json,
     сформировать текст отчёта, сохранить в questionnaire_results/text/,
-    при необходимости переслать в ЛС HR. Возвращает путь к сохранённому txt.
+    при необходимости переслать в ЛС HR; отчёт по вакансиям (топ-1) — также кандидату, если передан candidate_entity.
+    Возвращает путь к сохранённому txt.
     """
     _ensure_results_dirs()
     user_label = result.get("user", "unknown").replace("@", "")
@@ -375,7 +378,7 @@ async def dump_result_and_save_text(
                 offerings = enrich_offerings(raw, places)
                 meta = raw.get("meta") or {}
                 total_count = meta.get("totalCount") or len(offerings)
-                report = format_top_vacancies_report(offerings, top_n=3) if offerings else None
+                report = format_top_vacancies_report(offerings, top_n=VACANCY_TOP_N) if offerings else None
                 return offerings, report, total_count
 
             offerings, report_text, total_count = await asyncio.to_thread(_fetch_and_report)
@@ -384,7 +387,13 @@ async def dump_result_and_save_text(
             if report_text:
                 full_report = total_line + "\n\n" + report_text
                 await client.send_message(hr, full_report)
-                print(f"Отчёт по вакансиям (топ-3) отправлен {hr}")
+                print(f"Отчёт по вакансиям отправлен {hr}")
+                if candidate_entity is not None and client:
+                    try:
+                        await client.send_message(candidate_entity, full_report)
+                        print(f"Отчёт по вакансиям отправлен кандидату {candidate_entity.username}")
+                    except Exception as e:
+                        log.exception("Send vacancy report to candidate failed: %s", e)
             if SAVE_RESULTS_TO_FILES and offerings:
                 vac_path = RESULTS_JSON_DIR / f"vacancies_{user_label}_{safe_ts}.json"
                 try:

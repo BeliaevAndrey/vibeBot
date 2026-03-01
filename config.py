@@ -29,6 +29,8 @@ CANDIDATE_USERNAME = os.environ.get("CANDIDATE_USERNAME", "")
 # VaxtaRekrut API (опционально; при отсутствии автозагрузка вакансий не выполняется)
 VACANCY_API_URL = os.environ.get("VACANCY_API_URL", "https://platform.vaxtarekrut.ru/api/")
 VACANCY_API_KEY = os.environ.get("VACANCY_API_KEY", "")
+# Количество вакансий в топе для отчёта HR (отчёт по опроснику)
+VACANCY_TOP_N = int(os.environ.get("VACANCY_TOP_N", "1"))
 
 # Сохранение в файлы — только для истории; основной флоу не зависит от записи.
 # При "0"/"false" все сохранения (questionnaire result json/txt, short.json, vacancies.json) отключены.
@@ -56,7 +58,7 @@ RESULTS_JSON_DIR = RESULTS_BASE_DIR / "json"
 RESULTS_TEXT_DIR = RESULTS_BASE_DIR / "text"
 
 # Результаты вакансий (CLI)
-VACANCY_RESULTS_DIR = BASE_DIR / "results"
+VACANCY_RESULTS_DIR = BASE_DIR / "vacancies_results"
 
 # Логи
 LOG_DIR = BASE_DIR / os.environ.get("LOG_DIR", "logs")

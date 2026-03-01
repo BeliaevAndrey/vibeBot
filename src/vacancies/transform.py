@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 from bs4 import BeautifulSoup
 import logging
 
+from config import VACANCY_TOP_N    # top N vacancies to send to HR
 from .filter_builder import (
     CATEGORY,
     GENDERS,
@@ -66,7 +67,7 @@ def enrich_offerings(
             item["description_text"] = ""
         else:
             try:
-                soup = BeautifulSoup(desc_html, "html5lib")
+                soup = BeautifulSoup(desc_html, "lxml")
                 item["description_text"] = soup.get_text(separator="\n", strip=True)
             except Exception as e:
                 logging.getLogger("userbot").exception(
@@ -80,18 +81,19 @@ def enrich_offerings(
 
 
 def _shorten_description(text: str, max_len: int = 100) -> str:
-    """Заменяет переносы на пробел, обрезает до max_len и добавляет '...' при обрезке."""
-    if not text:
-        return ""
-    one_line = text.replace("\n", " ").strip()
-    if len(one_line) <= max_len:
-        return one_line
-    return one_line[:max_len].rstrip() + "..."
+    """Временно отключено: заказчик просит полное описание. Ниже — прежняя логика (переносы → пробел, обрезка до max_len)."""
+    return text or ""
+    # if not text:
+    #     return ""
+    # one_line = text.replace("\n", " ").strip()
+    # if len(one_line) <= max_len:
+    #     return one_line
+    # return one_line[:max_len].rstrip() + "..."
 
 
 def format_top_vacancies_report(
     offerings: List[Dict[str, Any]],
-    top_n: int = 3,
+    top_n: int = VACANCY_TOP_N,
     description_max_len: int = 120,
 ) -> str:
     """

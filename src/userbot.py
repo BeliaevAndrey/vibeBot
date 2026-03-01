@@ -141,7 +141,10 @@ def run_userbot(command_mode: bool = False) -> None:
                     result = questionnaire.finish_session(sender_id)
                     if result:
                         hr = cmd_state["hr_override"] or HR_ACCOUNT
-                        await questionnaire.dump_result_and_save_text(result, client, hr_account=hr or None)
+                        await questionnaire.dump_result_and_save_text(
+                            result, client, hr_account=hr or None,
+                            candidate_entity=cmd_state.get("candidate_user_id"),
+                        )
                     cmd_state["questionnaire_running"] = False
                     cmd_state["authenticated"] = False
                 return
@@ -317,7 +320,9 @@ def run_userbot(command_mode: bool = False) -> None:
             if done:
                 result = questionnaire.finish_session(sender_id)
                 if result:
-                    await questionnaire.dump_result_and_save_text(result, client)
+                    await questionnaire.dump_result_and_save_text(
+                        result, client, candidate_entity=candidate_user_id
+                    )
 
         client.run_until_disconnected()
 
