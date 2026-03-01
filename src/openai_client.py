@@ -120,7 +120,10 @@ def summarize_questionnaire(result: Dict[str, Any]) -> Dict[str, Any]:
     Возвращает словарь вида:
     {
       "full_name": str | None,
-      "gender": str | None,      # "мужчина"/"женщина" или None (если confidence < 0.9)
+      "last_name": str | None,   # фамилия (из разбора ФИО)
+      "first_name": str | None,  # имя
+      "patronymic": str | None,  # отчество (может отсутствовать)
+      "gender": str | None,      # "мужчина"/"женщина" или None
       "birth_date": str | None,  # ISO YYYY-MM-DD или None
       "age": int | None,         # возраст в годах, вычисляется в скрипте
       "job_type": str | None,    # "склад"/"производство" или None
@@ -158,7 +161,12 @@ def summarize_questionnaire(result: Dict[str, Any]) -> Dict[str, Any]:
                         "- Если есть малейшая неопределённость — возвращай null.\n\n"
 
                         "Правила извлечения:\n"
-                        "1. full_name — ФИО, если явно указано.\n"
+                        "1. full_name — ФИО целиком, если явно указано.\n"
+                        "   Дополнительно разбери ФИО на компоненты (порядок в русском: Фамилия Имя Отчество, или Имя Отчество Фамилия):\n"
+                        "   - last_name — фамилия;\n"
+                        "   - first_name — имя;\n"
+                        "   - patronymic — отчество (если есть, иначе null).\n"
+                        "   Если ФИО неполное (например, только имя) — заполни только известные поля, остальные null.\n"
                         "2. gender — только если:\n"
                         "   - явно указан пол\n"
                         "   - или однозначно определяется по ФИО.\n"
@@ -191,7 +199,20 @@ def summarize_questionnaire(result: Dict[str, Any]) -> Dict[str, Any]:
                             "type": "object",
                             "properties": {
                                 "full_name": {
-                                    "type": ["string", "null"]
+                                    "type": ["string", "null"],
+                                    "description": "ФИО целиком"
+                                },
+                                "last_name": {
+                                    "type": ["string", "null"],
+                                    "description": "Фамилия"
+                                },
+                                "first_name": {
+                                    "type": ["string", "null"],
+                                    "description": "Имя"
+                                },
+                                "patronymic": {
+                                    "type": ["string", "null"],
+                                    "description": "Отчество (если нет — null)"
                                 },
                                 "gender": {
                                     "type": ["string", "null"],
@@ -214,6 +235,9 @@ def summarize_questionnaire(result: Dict[str, Any]) -> Dict[str, Any]:
                             },
                             "required": [
                                 "full_name",
+                                "last_name",
+                                "first_name",
+                                "patronymic",
                                 "gender",
                                 "birth_date",
                                 "age",
@@ -242,6 +266,9 @@ def summarize_questionnaire(result: Dict[str, Any]) -> Dict[str, Any]:
         logging.getLogger("userbot").exception("Ошибка выжимки опроса: %s", e)
         return {
             "full_name": None,
+            "last_name": None,
+            "first_name": None,
+            "patronymic": None,
             "gender": None,
             "birth_date": None,
             "age": None,
@@ -269,6 +296,9 @@ def summarize_questionnaire(result: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "full_name": data.get("full_name"),
+        "last_name": data.get("last_name"),
+        "first_name": data.get("first_name"),
+        "patronymic": data.get("patronymic"),
         "gender": data.get("gender"),
         "birth_date": birth_date_iso,
         "age": age,

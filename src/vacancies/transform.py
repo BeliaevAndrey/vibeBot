@@ -97,11 +97,11 @@ def format_top_vacancies_report(
     description_max_len: int = 120,
 ) -> str:
     """
-    Формирует человеко-читаемый отчёт по топ-N вакансиям для отправки в HR.
+    Формирует человеко-читаемый отчёт по 1-й вакансии для отправки HR и кандидату.
     Поля: id, f_offering_name, Вакансия от (updatedAt или createdAt), region_name,
     gender_human, nationality_human, category_human, rate_human, description_text.
     """
-    lines = ["Вакансии по кандидату (топ-3)", ""]
+    lines = ["Вакансия:", ""]
     for idx, item in enumerate(offerings[:top_n], start=1):
         name = item.get("f_offering_name") or "—"
         lines.append(f"{idx}. {name}")

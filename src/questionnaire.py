@@ -91,6 +91,15 @@ def _ensure_results_dirs() -> None:
     RESULTS_TEXT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _get_fio_from_short(short: dict[str, Any]) -> tuple[str, str]:
+    """Из выжимки short (full_name, first_name, patronymic) — полное ФИО и обращение «Имя Отчество»."""
+    full = (short.get("full_name") or "").strip()
+    first = (short.get("first_name") or "").strip()
+    pat = (short.get("patronymic") or "").strip()
+    name_pat = f"{first} {pat}".strip() or full
+    return full, name_pat
+
+
 def _format_report_date(iso_date: str | None) -> str:
     """Преобразовать дату из ISO в вид 'YYYY-mm-dd HH:MM (МСК)' для отчёта."""
     if not iso_date:
@@ -288,7 +297,7 @@ async def dump_result_and_save_text(
     """
     Дамп questionnaire_result в questionnaire_results/json,
     сформировать текст отчёта, сохранить в questionnaire_results/text/,
-    при необходимости переслать в ЛС HR; отчёт по вакансиям (топ-1) — также кандидату, если передан candidate_entity.
+    при необходимости переслать в ЛС HR; отчёт по 1 вакансии — также кандидату (отдельным текстом), если передан candidate_entity.
     Возвращает путь к сохранённому txt.
     """
     _ensure_results_dirs()
@@ -364,7 +373,7 @@ async def dump_result_and_save_text(
         except Exception as e:
             log.exception("Save short summary failed: %s", e)
 
-    # Автозагрузка вакансий по short: отчёт топ-3 — в HR напрямую; сохранение в файл только для истории
+    # Автозагрузка вакансий по short: описание 1-й вакансии — HR напрямую; сохранение в файл только для истории
     if short is not None and VACANCY_API_KEY and hr and client:
         try:
             def _fetch_and_report() -> tuple[list, str | None, int]:
@@ -382,16 +391,36 @@ async def dump_result_and_save_text(
                 return offerings, report, total_count
 
             offerings, report_text, total_count = await asyncio.to_thread(_fetch_and_report)
-            total_line = f"Всего найдено вакансий: {total_count}"
-            print(total_line)
+            print(f"Всего найдено вакансий: {total_count}")
             if report_text:
-                full_report = total_line + "\n\n" + report_text
-                await client.send_message(hr, full_report)
+                candidate_display = result.get("user", "unknown")
+                if candidate_display and not str(candidate_display).startswith("@"):
+                    candidate_display = f"@{candidate_display}"
+                full_fio, name_patronymic = _get_fio_from_short(short)
+                date_str = _format_report_date(result.get("date"))
+                hr_fio_part = f" ({full_fio})" if full_fio else ""
+                msg_hr = (
+                    f"Вакансия для кандидата {candidate_display}{hr_fio_part}. "
+                    f"Дата опроса: {date_str}. Всего найдено вакансий: {total_count}.\n\n"
+                    f"{report_text}"
+                )
+                await client.send_message(hr, msg_hr)
                 print(f"Отчёт по вакансиям отправлен {hr}")
+                if name_patronymic:
+                    candidate_intro = (
+                        f"{name_patronymic}, подобрали Вам вакансию, высылаем описание. "
+                        "Можем обсудить другие варианты вакансий."
+                    )
+                else:
+                    candidate_intro = (
+                        "Подобрали Вам вакансию, высылаем описание. "
+                        "Можем обсудить другие варианты вакансий."
+                    )
+                msg_candidate = f"{candidate_intro}\n\n{report_text}"
                 if candidate_entity is not None and client:
                     try:
-                        await client.send_message(candidate_entity, full_report)
-                        print(f"Отчёт по вакансиям отправлен кандидату {candidate_entity.username}")
+                        await client.send_message(candidate_entity, msg_candidate)
+                        print("Отчёт по вакансиям отправлен кандидату")
                     except Exception as e:
                         log.exception("Send vacancy report to candidate failed: %s", e)
             if SAVE_RESULTS_TO_FILES and offerings:
