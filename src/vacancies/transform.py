@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 from bs4 import BeautifulSoup
 import logging
 
+
 from config import VACANCY_TOP_N    # top N vacancies to send to HR
 from .filter_builder import (
     CATEGORY,
@@ -68,6 +69,9 @@ def enrich_offerings(
         else:
             try:
                 soup = BeautifulSoup(desc_html, "lxml")
+                # Подставляем полный URL из href в текст, чтобы в выводе была ссылка (не только «Google диск» и т.п.)
+                for a in soup.find_all("a", href=True):
+                    a.replace_with(a.get("href", ""))
                 item["description_text"] = soup.get_text(separator="\n", strip=True)
             except Exception as e:
                 logging.getLogger("userbot").exception(
