@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import logging
 
 from config import VACANCY_TOP_N    # top N vacancies to send to HR
+from .description_formatter import format_vacancy_description
 from .filter_builder import (
     CATEGORY,
     GENDERS,
@@ -68,6 +69,9 @@ def enrich_offerings(
         else:
             try:
                 soup = BeautifulSoup(desc_html, "lxml")
+                # Подставляем полный URL из href в текст, чтобы в выводе была ссылка (не только «Google диск» и т.п.)
+                for a in soup.find_all("a", href=True):
+                    a.replace_with(a.get("href", ""))
                 item["description_text"] = soup.get_text(separator="\n", strip=True)
             except Exception as e:
                 logging.getLogger("userbot").exception(
@@ -75,31 +79,22 @@ def enrich_offerings(
                 )
                 item["description_text"] = desc_html
 
+        # Форматированное описание (секции + футер) — для кандидата и для сохранения в description_text
+        raw_desc = item.get("description_text") or ""
+        item["description_text"] = format_vacancy_description(raw_desc, item)
+
         offerings.append(item)
 
     return offerings
 
 
-def _shorten_description(text: str, max_len: int = 100) -> str:
-    """Временно отключено: заказчик просит полное описание. Ниже — прежняя логика (переносы → пробел, обрезка до max_len)."""
-    return text or ""
-    # if not text:
-    #     return ""
-    # one_line = text.replace("\n", " ").strip()
-    # if len(one_line) <= max_len:
-    #     return one_line
-    # return one_line[:max_len].rstrip() + "..."
-
-
 def format_top_vacancies_report(
     offerings: List[Dict[str, Any]],
     top_n: int = VACANCY_TOP_N,
-    description_max_len: int = 120,
 ) -> str:
     """
-    Формирует человеко-читаемый отчёт по 1-й вакансии для отправки HR и кандидату.
-    Поля: id, f_offering_name, Вакансия от (updatedAt или createdAt), region_name,
-    gender_human, nationality_human, category_human, rate_human, description_text.
+    Формирует человеко-читаемый отчёт по топ-N вакансиям для отправки HR и кандидату.
+    description_text уже содержит форматированное описание (заголовок, секции, футер).
     """
     lines = ["Вакансия:", ""]
     for idx, item in enumerate(offerings[:top_n], start=1):
@@ -128,10 +123,11 @@ def format_top_vacancies_report(
         lines.append(f"Категория: {cat}. Оплата: {rate}")
 
         desc = item.get("description_text") or ""
+        lines.append("Описание:")
         if desc:
-            lines.append(f"Описание: {_shorten_description(desc, description_max_len)}")
+            lines.append(desc)
         else:
-            lines.append("Описание: —")
+            lines.append("—")
 
         lines.append("")
         if idx < min(len(offerings), top_n):
@@ -160,5 +156,5 @@ def print_offerings(offerings: List[Dict[str, Any]], limit: int = 10) -> None:
         print(f"{TRANSLATE['f_offering_offering']}: {item.get('category_human', '—')}")
         print(f"{TRANSLATE['f_offering_rate']}: {item.get('rate_human', '—')}")
         desc = item.get("description_text") or ""
-        print(f"{TRANSLATE['f_offering_new_description']}: {_shorten_description(desc)}")
+        print(f"{TRANSLATE['f_offering_new_description']}: {desc or ''}")
         print("\n" + "=" * 40 + "\n")
