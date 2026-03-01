@@ -88,17 +88,6 @@ def enrich_offerings(
     return offerings
 
 
-def _shorten_description(text: str, max_len: int = 100) -> str:
-    """Временно отключено: заказчик просит полное описание. Ниже — прежняя логика (переносы → пробел, обрезка до max_len)."""
-    return text or ""
-    # if not text:
-    #     return ""
-    # one_line = text.replace("\n", " ").strip()
-    # if len(one_line) <= max_len:
-    #     return one_line
-    # return one_line[:max_len].rstrip() + "..."
-
-
 def format_top_vacancies_report(
     offerings: List[Dict[str, Any]],
     top_n: int = VACANCY_TOP_N,
@@ -167,5 +156,5 @@ def print_offerings(offerings: List[Dict[str, Any]], limit: int = 10) -> None:
         print(f"{TRANSLATE['f_offering_offering']}: {item.get('category_human', '—')}")
         print(f"{TRANSLATE['f_offering_rate']}: {item.get('rate_human', '—')}")
         desc = item.get("description_text") or ""
-        print(f"{TRANSLATE['f_offering_new_description']}: {_shorten_description(desc)}")
+        print(f"{TRANSLATE['f_offering_new_description']}: {desc or ''}")
         print("\n" + "=" * 40 + "\n")
