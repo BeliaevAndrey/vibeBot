@@ -3,8 +3,8 @@ from typing import Any, Dict, List
 from bs4 import BeautifulSoup
 import logging
 
-
 from config import VACANCY_TOP_N    # top N vacancies to send to HR
+from .description_formatter import format_vacancy_description
 from .filter_builder import (
     CATEGORY,
     GENDERS,
@@ -79,6 +79,10 @@ def enrich_offerings(
                 )
                 item["description_text"] = desc_html
 
+        # Форматированное описание (секции + футер) — для кандидата и для сохранения в description_text
+        raw_desc = item.get("description_text") or ""
+        item["description_text"] = format_vacancy_description(raw_desc, item)
+
         offerings.append(item)
 
     return offerings
@@ -98,12 +102,10 @@ def _shorten_description(text: str, max_len: int = 100) -> str:
 def format_top_vacancies_report(
     offerings: List[Dict[str, Any]],
     top_n: int = VACANCY_TOP_N,
-    description_max_len: int = 120,
 ) -> str:
     """
-    Формирует человеко-читаемый отчёт по 1-й вакансии для отправки HR и кандидату.
-    Поля: id, f_offering_name, Вакансия от (updatedAt или createdAt), region_name,
-    gender_human, nationality_human, category_human, rate_human, description_text.
+    Формирует человеко-читаемый отчёт по топ-N вакансиям для отправки HR и кандидату.
+    description_text уже содержит форматированное описание (заголовок, секции, футер).
     """
     lines = ["Вакансия:", ""]
     for idx, item in enumerate(offerings[:top_n], start=1):
@@ -132,10 +134,11 @@ def format_top_vacancies_report(
         lines.append(f"Категория: {cat}. Оплата: {rate}")
 
         desc = item.get("description_text") or ""
+        lines.append("Описание:")
         if desc:
-            lines.append(f"Описание: {_shorten_description(desc, description_max_len)}")
+            lines.append(desc)
         else:
-            lines.append("Описание: —")
+            lines.append("—")
 
         lines.append("")
         if idx < min(len(offerings), top_n):
