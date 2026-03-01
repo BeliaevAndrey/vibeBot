@@ -30,7 +30,7 @@ log = logging.getLogger("userbot")
 
 # Тексты для режима команд
 CMD_LIST = (
-    "/set_hr — задать @username HR. После команды дождаться запроса @username HR"
+    "/set_hr — задать @username HR. После команды дождаться запроса @username HR\n"
     "/set_candidate — задать @username кандидата. После команды дождаться запроса @username кандидата\n"
     "/start_questions — запустить опрос (после set_hr и set_candidate)\n"
     "/cancel — выйти из режима команд"
