@@ -405,7 +405,7 @@ async def dump_result_and_save_text(
                     f"{report_text}"
                 )
                 await client.send_message(hr, msg_hr)
-                print(f"Отчёт по вакансиям отправлен {hr}")
+                print(f"Отчёт по вакансиям отправлен HR {hr}")
                 if name_patronymic:
                     candidate_intro = (
                         f"{name_patronymic}, подобрали Вам вакансию, высылаем описание. "
@@ -420,7 +420,7 @@ async def dump_result_and_save_text(
                 if candidate_entity is not None and client:
                     try:
                         await client.send_message(candidate_entity, msg_candidate)
-                        print("Отчёт по вакансиям отправлен кандидату")
+                        print(f"Отчёт по вакансиям отправлен кандидату {candidate_entity.username}")
                     except Exception as e:
                         log.exception("Send vacancy report to candidate failed: %s", e)
             if SAVE_RESULTS_TO_FILES and offerings:
