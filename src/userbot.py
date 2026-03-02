@@ -23,6 +23,7 @@ from config import (
     setup_logging,
 )
 from . import questionnaire
+from .human_delay import human_like_delay
 
 SESSION_NAME = "userbot_session"
 setup_logging()
@@ -136,6 +137,7 @@ def run_userbot(command_mode: bool = False) -> None:
                 else:
                     return
                 if reply_text:
+                    await human_like_delay(client, event.chat_id, reply_text)
                     await event.reply(reply_text)
                 if done:
                     result = questionnaire.finish_session(sender_id)
@@ -213,6 +215,7 @@ def run_userbot(command_mode: bool = False) -> None:
                             candidate_user_id = entity.id
                             uname = getattr(entity, "username", None)
                             greeting = questionnaire.get_greeting(uname)
+                            await human_like_delay(client, entity, greeting)
                             await client.send_message(entity, greeting)
                             questionnaire.init_session(candidate_user_id, uname)
                             cmd_state["candidate_user_id"] = candidate_user_id
@@ -315,6 +318,7 @@ def run_userbot(command_mode: bool = False) -> None:
                 return
 
             if reply_text:
+                await human_like_delay(client, event.chat_id, reply_text)
                 await event.reply(reply_text)
 
             if done:
