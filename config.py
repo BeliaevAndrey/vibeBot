@@ -41,6 +41,15 @@ COMMAND_MODE = _truthy(os.environ.get("COMMAND_MODE", "0"))
 # Пароль для входа в режим команд (проверка при /command_mode).
 COMMAND_MODE_PASSWORD = os.environ.get("COMMAND_MODE_PASSWORD", "")
 
+# Задержки ответов кандидату (имитация «живого» менеджера)
+# Скорость «печати»: символов в минуту (200–300 для человека в теме)
+TYPING_CHARS_PER_MIN = int(os.environ.get("TYPING_CHARS_PER_MIN", "250"))
+# Задержка «обдумывание» перед набором (сек), диапазон
+THINK_DELAY_MIN = float(os.environ.get("THINK_DELAY_MIN", "1.0"))
+THINK_DELAY_MAX = float(os.environ.get("THINK_DELAY_MAX", "2.5"))
+# Верхняя граница времени «печати» (сек), чтобы длинный отчёт не «печатался» минуты
+HUMAN_DELAY_MAX_TYPING_SEC = float(os.environ.get("HUMAN_DELAY_MAX_TYPING_SEC", "90"))
+
 
 # --- Базовые пути проекта ---
 

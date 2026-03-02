@@ -5,6 +5,7 @@
 import asyncio
 import json
 import logging
+import random
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
@@ -22,6 +23,7 @@ from config import (
     setup_logging,
 )
 from . import openai_client
+from .human_delay import human_like_delay
 from .vacancies import (
     enrich_offerings,
     filter_from_short,
@@ -419,6 +421,21 @@ async def dump_result_and_save_text(
                 msg_candidate = f"{candidate_intro}\n\n{report_text}"
                 if candidate_entity is not None and client:
                     try:
+                        if name_patronymic:
+                            wait_msg = (
+                                f"{name_patronymic}, подождите 2-3 минуты, пожалуйста. "
+                                "Подберу Вам образец вакансии."
+                            )
+                        else:
+                            wait_msg = (
+                                "Подождите 2-3 минуты, пожалуйста. "
+                                "Подберу Вам образец вакансии."
+                            )
+                        await human_like_delay(client, candidate_entity, wait_msg)
+                        await client.send_message(candidate_entity, wait_msg)
+                        wait_sec = random.randint(120, 180) + random.randint(1, 40)
+                        await asyncio.sleep(wait_sec)
+                        await human_like_delay(client, candidate_entity, msg_candidate)
                         await client.send_message(candidate_entity, msg_candidate)
                         print(f"Отчёт по вакансиям отправлен кандидату {candidate_entity.username}")
                     except Exception as e:
