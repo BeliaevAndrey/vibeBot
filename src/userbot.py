@@ -1,10 +1,13 @@
 """
 UserBot — учётная запись Telegram, опросник с OpenAI.
-Пишет первым кандидату (CANDIDATE_USERNAME или /set_candidate в command_mode), обрабатывает ответы по сценарию опросника.
+Пишет первым кандидату (из списка или /set_candidate в command_mode), обрабатывает ответы по сценарию опросника.
 """
 
 import asyncio
+import json
 import logging
+from datetime import datetime, timezone, timedelta
+
 from telethon.sync import TelegramClient
 from telethon import events
 from telethon.errors import (
@@ -17,17 +20,21 @@ from config import (
     TG_API_ID,
     TG_API_HASH,
     TG_PHONE,
-    CANDIDATE_USERNAME,
     HR_ACCOUNT,
     COMMAND_MODE_PASSWORD,
+    SAVE_RESULTS_TO_FILES,
+    PROCESSED_USERS_PATH,
     setup_logging,
 )
 from . import questionnaire
 from .human_delay import human_like_delay
+from .candidates_source import get_candidates
+from .candidates_utils import _prepare_candidate_entry, _record_processed
 
 SESSION_NAME = "userbot_session"
 setup_logging()
 log = logging.getLogger("userbot")
+UTC_PLUS_3 = timezone(timedelta(hours=3))
 
 # Тексты для режима команд
 CMD_LIST = (
@@ -69,6 +76,11 @@ def run_userbot(command_mode: bool = False) -> None:
         "candidate_user_id": None,
     }
 
+    # Состояние массового опроса (обычный режим)
+    candidates_list: list[dict] = []
+    current_candidate_index: int | None = None
+    processed_users: dict[int, dict] = {}
+
     cmd_log = None
     try:
         try:
@@ -83,18 +95,15 @@ def run_userbot(command_mode: bool = False) -> None:
         if command_mode:
             cmd_log = logging.getLogger("command_mode")
             cmd_log.info("начало сеанса command_mode")
-        if not command_mode and CANDIDATE_USERNAME:
-            try:
-                entity = client.get_entity(CANDIDATE_USERNAME)
-                candidate_user_id = entity.id
-                candidate_username = getattr(entity, "username", None)
-                greeting = questionnaire.get_greeting(candidate_username)
-                client.send_message(entity, greeting)
-                questionnaire.init_session(candidate_user_id, getattr(entity, "username", None))
-                print(f"Отправлено приветствие кандидату {CANDIDATE_USERNAME}")
-            except Exception as e:
-                log.exception("Не удалось отправить приветствие кандидату: %s", e)
-                print(f"Ошибка приветствия: {e}")
+        else:
+            # Обычный режим: получаем список кандидатов из источника
+            raw_candidates = get_candidates()
+            for username, phone in raw_candidates:
+                entry = _prepare_candidate_entry(username, phone)
+                if entry is not None:
+                    candidates_list.append(entry)
+            if not candidates_list:
+                print("Список кандидатов пуст, опрос не запущен.")
 
         if command_mode:
             print("Режим команд. Ожидаю команды в ЛС... (Ctrl+C для выхода)\n")
@@ -108,6 +117,39 @@ def run_userbot(command_mode: bool = False) -> None:
             except Exception:
                 log.exception("Handler error")
                 raise
+
+        async def _start_next_candidate() -> None:
+            """Запустить опрос следующего кандидата из списка (обычный режим)."""
+            nonlocal candidate_user_id, current_candidate_index
+            if command_mode or not candidates_list:
+                return
+            idx = (current_candidate_index if current_candidate_index is not None else -1) + 1
+            while idx < len(candidates_list):
+                entry = candidates_list[idx]
+                username = entry.get("username")
+                phone = entry.get("phone")
+                peer = username or phone
+                if not peer:
+                    _record_processed(processed_users, None, username, phone, False, "empty peer after normalization", logger=log)
+                    idx += 1
+                    continue
+                try:
+                    entity = await client.get_entity(peer)
+                    candidate_user_id = entity.id
+                    uname = getattr(entity, "username", None)
+                    greeting = questionnaire.get_greeting(uname)
+                    # if TOGGLE_DELAY != "OFF":
+                        # await human_like_delay(client, entity, greeting)                    
+                    await client.send_message(entity, greeting)
+                    questionnaire.init_session(candidate_user_id, uname)
+                    current_candidate_index = idx
+                    print(f"Опрос запущен. Кандидат: {username or phone}.")
+                    return
+                except Exception as e:
+                    log.exception("Не удалось запустить опрос для кандидата %s: %s", peer, e)
+                    _record_processed(processed_users, None, username, phone, False, str(e), logger=log)
+                    idx += 1
+            print("Кандидаты закончились, новых опросов нет.")
 
         async def _handle_message(event, client, command_mode, cmd_state, candidate_user_id):
             text = (event.text or "").strip()
@@ -146,6 +188,15 @@ def run_userbot(command_mode: bool = False) -> None:
                         await questionnaire.dump_result_and_save_text(
                             result, client, hr_account=hr or None,
                             candidate_entity=cmd_state.get("candidate_user_id"),
+                        )
+                        _record_processed(
+                            processed_users,
+                            sender_id,
+                            username_str or cmd_state.get("candidate_override"),
+                            None,
+                            True,
+                            None,
+                            logger=log,
                         )
                     cmd_state["questionnaire_running"] = False
                     cmd_state["authenticated"] = False
@@ -226,6 +277,7 @@ def run_userbot(command_mode: bool = False) -> None:
                         except Exception as e:
                             log.exception("Не удалось запустить опрос: %s", e)
                             await event.reply(f"Ошибка: {e}")
+                            _record_processed(processed_users, None, cand, None, False, str(e), logger=log)
                             cmd_state["waiting_for"] = None
                     else:
                         cmd_state["waiting_for"] = None
@@ -295,7 +347,7 @@ def run_userbot(command_mode: bool = False) -> None:
                         cmd_state["non_command_count"] = -1
                 return
 
-            # ----- Обычный режим (не command_mode): один кандидат из config -----
+            # ----- Обычный режим (не command_mode): один кандидат за раз из списка -----
             if candidate_user_id is not None and sender_id != candidate_user_id:
                 return
 
@@ -322,11 +374,27 @@ def run_userbot(command_mode: bool = False) -> None:
                 await event.reply(reply_text)
 
             if done:
+                # Зафиксировать результат и перейти к следующему кандидату (обычный режим)
+                username_src = username_str
+                phone_src = None
+                if current_candidate_index is not None and 0 <= current_candidate_index < len(candidates_list):
+                    entry = candidates_list[current_candidate_index]
+                    username_src = username_src or entry.get("username")
+                    phone_src = entry.get("phone")
+
+                _record_processed(processed_users, sender_id, username_src, phone_src, True, None, logger=log)
+
                 result = questionnaire.finish_session(sender_id)
                 if result:
                     await questionnaire.dump_result_and_save_text(
                         result, client, candidate_entity=candidate_user_id
                     )
+
+                await _start_next_candidate()
+
+        if not command_mode and candidates_list:
+            # Старт первого кандидата после инициализации
+            client.loop.create_task(_start_next_candidate())
 
         client.run_until_disconnected()
 

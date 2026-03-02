@@ -5,6 +5,7 @@
 from .api_client import get_job_offerings, get_places
 from .filter_builder import filter_from_short, generate_filter, choose_filters
 from .transform import enrich_offerings, format_top_vacancies_report, print_offerings
+from .message_splitter import split_vacancy_messages
 
 __all__ = [
     "get_places",
@@ -15,4 +16,5 @@ __all__ = [
     "choose_filters",
     "format_top_vacancies_report",
     "print_offerings",
+    "split_vacancy_messages",
 ]
