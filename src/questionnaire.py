@@ -425,14 +425,15 @@ async def dump_result_and_save_text(
                             wait_msg = (
                                 f"{name_patronymic}, подождите 2-3 минуты, пожалуйста. "
                                 "Подберу Вам образец вакансии."
-                            )
+                            )   # TODO: уточнить формулировку!
                         else:
                             wait_msg = (
                                 "Подождите 2-3 минуты, пожалуйста. "
                                 "Подберу Вам образец вакансии."
-                            )
+                            )   # TODO: уточнить формулировку!
                         await human_like_delay(client, candidate_entity, wait_msg)
                         await client.send_message(candidate_entity, wait_msg)
+                        
                         wait_sec = random.randint(120, 180) + random.randint(1, 40)
                         await asyncio.sleep(wait_sec)
                         await human_like_delay(client, candidate_entity, msg_candidate)

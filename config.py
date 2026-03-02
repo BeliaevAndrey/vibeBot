@@ -42,6 +42,8 @@ COMMAND_MODE = _truthy(os.environ.get("COMMAND_MODE", "0"))
 COMMAND_MODE_PASSWORD = os.environ.get("COMMAND_MODE_PASSWORD", "")
 
 # Задержки ответов кандидату (имитация «живого» менеджера)
+# Строковый флаг: "ON" (по умолчанию) — задержки включены; "OFF" — human_like_delay отключён.
+TOGGLE_DELAY = (os.environ.get("TOGGLE_DELAY", "ON") or "ON").strip().upper()
 # Скорость «печати»: символов в минуту (200–300 для человека в теме)
 TYPING_CHARS_PER_MIN = int(os.environ.get("TYPING_CHARS_PER_MIN", "250"))
 # Задержка «обдумывание» перед набором (сек), диапазон

@@ -4,12 +4,12 @@
 
 import asyncio
 import random
-import time
 
 from telethon import functions
 from telethon.tl.types import SendMessageTypingAction
 
 from config import (
+    TOGGLE_DELAY,
     TYPING_CHARS_PER_MIN,
     THINK_DELAY_MIN,
     THINK_DELAY_MAX,
@@ -29,17 +29,15 @@ def _typing_duration_sec(text: str) -> float:
     return min(sec, HUMAN_DELAY_MAX_TYPING_SEC)
 
 
-def _think_duration_sec() -> float:
-    """Случайная задержка «обдумывание» в секундах."""
-    return random.uniform(THINK_DELAY_MIN, THINK_DELAY_MAX)
-
-
 async def human_like_delay(client, entity, text: str) -> None:
     """
     Перед отправкой сообщения кандидату: пауза «обдумывание» + показ «печатает» на время,
     пропорциональное длине текста (200–300 симв/мин из config). Вызывать перед send_message / reply.
     """
-    think_sec = _think_duration_sec()
+    if TOGGLE_DELAY == "OFF":
+        return
+
+    think_sec = random.uniform(THINK_DELAY_MIN, THINK_DELAY_MAX)
     await asyncio.sleep(think_sec)
 
     typing_sec = _typing_duration_sec(text or "")
@@ -54,11 +52,3 @@ async def human_like_delay(client, entity, text: str) -> None:
         chunk = min(TYPING_ACTION_INTERVAL_SEC, typing_sec)
         await asyncio.sleep(chunk)
         typing_sec -= chunk
-
-
-def human_like_delay_sync_seconds(text: str) -> float:
-    """
-    Суммарная задержка в секундах для sync-контекста (приветствие при старте без typing в UI).
-    Возвращает think_sec + typing_sec для использования с time.sleep().
-    """
-    return _think_duration_sec() + _typing_duration_sec(text or "")

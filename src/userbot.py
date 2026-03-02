@@ -5,7 +5,6 @@ UserBot — учётная запись Telegram, опросник с OpenAI.
 
 import asyncio
 import logging
-import time
 from telethon.sync import TelegramClient
 from telethon import events
 from telethon.errors import (
@@ -24,7 +23,7 @@ from config import (
     setup_logging,
 )
 from . import questionnaire
-from .human_delay import human_like_delay, human_like_delay_sync_seconds
+from .human_delay import human_like_delay
 
 SESSION_NAME = "userbot_session"
 setup_logging()
@@ -90,7 +89,6 @@ def run_userbot(command_mode: bool = False) -> None:
                 candidate_user_id = entity.id
                 candidate_username = getattr(entity, "username", None)
                 greeting = questionnaire.get_greeting(candidate_username)
-                time.sleep(human_like_delay_sync_seconds(greeting))
                 client.send_message(entity, greeting)
                 questionnaire.init_session(candidate_user_id, getattr(entity, "username", None))
                 print(f"Отправлено приветствие кандидату {CANDIDATE_USERNAME}")
