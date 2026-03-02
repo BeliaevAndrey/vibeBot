@@ -20,6 +20,7 @@ from config import (
     QUESTIONS_PATH,
     RESULTS_JSON_DIR,
     RESULTS_TEXT_DIR,
+    TOGGLE_DELAY,
     setup_logging,
 )
 from . import openai_client
@@ -31,6 +32,7 @@ from .vacancies import (
     generate_filter,
     get_job_offerings,
     get_places,
+    split_vacancy_messages,
 )
 
 setup_logging()
@@ -111,6 +113,9 @@ def _format_report_date(iso_date: str | None) -> str:
         return dt.strftime("%Y-%m-%d %H:%M") + " (МСК)"
     except (ValueError, TypeError):
         return iso_date or "—"
+
+
+_MAX_VACANCY_MSG_LEN = 4000  # оставлен на случай дальнейшего использования в этом модуле
 
 
 def get_greeting(candidate_username: str | None = None) -> str:
@@ -376,37 +381,60 @@ async def dump_result_and_save_text(
             log.exception("Save short summary failed: %s", e)
 
     # Автозагрузка вакансий по short: описание 1-й вакансии — HR напрямую; сохранение в файл только для истории
-    if short is not None and VACANCY_API_KEY and hr and client:
-        try:
-            def _fetch_and_report() -> tuple[list, str | None, int]:
-                places_resp = get_places()
-                places = places_resp.get("data", [])
-                flat = filter_from_short(short, places)
-                if not flat:
-                    return [], None, 0
-                filter_dict = generate_filter(flat)
-                raw = get_job_offerings(filter_dict=filter_dict)
-                offerings = enrich_offerings(raw, places)
-                meta = raw.get("meta") or {}
-                total_count = meta.get("totalCount") or len(offerings)
-                report = format_top_vacancies_report(offerings, top_n=VACANCY_TOP_N) if offerings else None
-                return offerings, report, total_count
+    offerings: list[dict[str, Any]] = []
+    report_text: str | None = None
+    total_count: int = 0
 
+    if short is not None and VACANCY_API_KEY and hr and client:
+        def _fetch_and_report() -> tuple[list, str | None, int]:
+            places_resp = get_places()
+            places = places_resp.get("data", [])
+            flat = filter_from_short(short, places)
+            if not flat:
+                return [], None, 0
+            filter_dict = generate_filter(flat)
+            raw = get_job_offerings(filter_dict=filter_dict)
+            offerings_local = enrich_offerings(raw, places)
+            meta = raw.get("meta") or {}
+            total_count_local = meta.get("totalCount") or len(offerings_local)
+            report_local = format_top_vacancies_report(offerings_local, top_n=VACANCY_TOP_N) if offerings_local else None
+            return offerings_local, report_local, total_count_local
+
+        try:
             offerings, report_text, total_count = await asyncio.to_thread(_fetch_and_report)
-            print(f"Всего найдено вакансий: {total_count}")
-            if report_text:
+        except Exception as e:
+            log.exception("Vacancy fetch failed: %s", e)
+            offerings = []
+            report_text = None
+            total_count = 0
+
+        print(f"Всего найдено вакансий: {total_count}")
+
+        if report_text:
+            try:
                 candidate_display = result.get("user", "unknown")
                 if candidate_display and not str(candidate_display).startswith("@"):
                     candidate_display = f"@{candidate_display}"
                 full_fio, name_patronymic = _get_fio_from_short(short)
                 date_str = _format_report_date(result.get("date"))
                 hr_fio_part = f" ({full_fio})" if full_fio else ""
-                msg_hr = (
+                hr_header = (
                     f"Вакансия для кандидата {candidate_display}{hr_fio_part}. "
-                    f"Дата опроса: {date_str}. Всего найдено вакансий: {total_count}.\n\n"
-                    f"{report_text}"
+                    f"Дата опроса: {date_str}. Всего найдено вакансий: {total_count}."
                 )
-                await client.send_message(hr, msg_hr)
+                # Шапка отдельным сообщением
+                await client.send_message(hr, hr_header)
+                print(f"Отчёт по вакансиям (шапка) отправлен HR {hr}")
+
+                # Тело вакансии (вакансия + футер) — отдельное сообщение/сообщения
+                vacancy_parts = split_vacancy_messages(report_text)
+                # Задержка между шапкой и телом 5–10 секунд
+                await asyncio.sleep(random.randint(5, 10))
+                for idx_part, part in enumerate(vacancy_parts):
+                    await client.send_message(hr, part)
+                    if idx_part < len(vacancy_parts) - 1:
+                        # Задержка между сообщениями тела 4–5 секунд
+                        await asyncio.sleep(random.randint(4, 5))
                 print(f"Отчёт по вакансиям отправлен HR {hr}")
                 if name_patronymic:
                     candidate_intro = (
@@ -418,7 +446,9 @@ async def dump_result_and_save_text(
                         "Подобрали Вам вакансию, высылаем описание. "
                         "Можем обсудить другие варианты вакансий."
                     )
-                msg_candidate = f"{candidate_intro}\n\n{report_text}"
+
+                vacancy_parts_candidate = split_vacancy_messages(report_text)
+
                 if candidate_entity is not None and client:
                     try:
                         if name_patronymic:
@@ -431,25 +461,45 @@ async def dump_result_and_save_text(
                                 "Подождите 2-3 минуты, пожалуйста. "
                                 "Подберу Вам образец вакансии."
                             )   # TODO: уточнить формулировку!
+                        # Сообщение «подождите 2–3 минуты» с human_like_delay
                         await human_like_delay(client, candidate_entity, wait_msg)
                         await client.send_message(candidate_entity, wait_msg)
-                        
-                        wait_sec = random.randint(120, 180) + random.randint(1, 40)
-                        await asyncio.sleep(wait_sec)
-                        await human_like_delay(client, candidate_entity, msg_candidate)
-                        await client.send_message(candidate_entity, msg_candidate)
-                        print(f"Отчёт по вакансиям отправлен кандидату {candidate_entity.username}")
+
+                        # Задержка на «поиск вакансии» остаётся
+                        if TOGGLE_DELAY != "OFF":
+                            wait_sec = random.randint(120, 180) + random.randint(1, 40)
+                            await asyncio.sleep(wait_sec)
+
+                        # Шапка кандидату отдельным сообщением
+                        if TOGGLE_DELAY != "OFF":
+                            await human_like_delay(client, candidate_entity, candidate_intro)
+                        await client.send_message(candidate_entity, candidate_intro)
+
+                        # Задержка 5–10 сек как на вставку из буфера
+                        await asyncio.sleep(random.randint(5, 10))
+
+                        # Тело вакансии (вакансия + футер) — одно или несколько сообщений,
+                        # без имитации набора (HR не «перепечатывает» текст вакансии).
+                        for idx_part, part in enumerate(vacancy_parts_candidate):
+                            await client.send_message(candidate_entity, part)
+                            if idx_part < len(vacancy_parts_candidate) - 1:
+                                # Задержка между сообщениями тела 4–5 секунд (как «вставка из буфера»)
+                                await asyncio.sleep(random.randint(4, 5))
+
+                        print(f"Отчёт по вакансиям отправлен кандидату {candidate_entity}")
                     except Exception as e:
                         log.exception("Send vacancy report to candidate failed: %s", e)
-            if SAVE_RESULTS_TO_FILES and offerings:
-                vac_path = RESULTS_JSON_DIR / f"vacancies_{user_label}_{safe_ts}.json"
-                try:
-                    with open(vac_path, "w", encoding="utf-8") as f:
-                        json.dump(offerings, f, ensure_ascii=False, indent=2)
-                except Exception as e:
-                    log.exception("Save vacancies.json failed: %s", e)
+            except Exception as e:
+                log.exception("Vacancy report send failed: %s", e)
+
+    # Dump вакансий — полностью отвязано от отправки сообщений
+    if SAVE_RESULTS_TO_FILES and offerings:
+        vac_path = RESULTS_JSON_DIR / f"vacancies_{user_label}_{safe_ts}.json"
+        try:
+            with open(vac_path, "w", encoding="utf-8") as f:
+                json.dump(offerings, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            log.exception("Vacancy fetch/report failed: %s", e)
+            log.exception("Save vacancies.json failed: %s", e)
 
     return str(text_path)
 

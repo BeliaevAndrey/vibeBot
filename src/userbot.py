@@ -138,7 +138,8 @@ def run_userbot(command_mode: bool = False) -> None:
                     candidate_user_id = entity.id
                     uname = getattr(entity, "username", None)
                     greeting = questionnaire.get_greeting(uname)
-                    await human_like_delay(client, entity, greeting)
+                    # if TOGGLE_DELAY != "OFF":
+                        # await human_like_delay(client, entity, greeting)                    
                     await client.send_message(entity, greeting)
                     questionnaire.init_session(candidate_user_id, uname)
                     current_candidate_index = idx
