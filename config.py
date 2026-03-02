@@ -67,6 +67,8 @@ QUESTIONS_PATH = RESOURCE_DIR / "json" / "questions.json"
 RESULTS_BASE_DIR = BASE_DIR / "questionnaire_results"
 RESULTS_JSON_DIR = RESULTS_BASE_DIR / "json"
 RESULTS_TEXT_DIR = RESULTS_BASE_DIR / "text"
+# Журнал обработанных кандидатов
+PROCESSED_USERS_PATH = RESULTS_BASE_DIR / "processed_users.json"
 
 # Результаты вакансий (CLI)
 VACANCY_RESULTS_DIR = BASE_DIR / "vacancies_results"
