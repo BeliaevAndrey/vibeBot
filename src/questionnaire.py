@@ -463,7 +463,8 @@ async def dump_result_and_save_text(
             raw = get_job_offerings(filter_dict=filter_dict)
             offerings_local = enrich_offerings(raw, places)
             meta = raw.get("meta") or {}
-            total_count_local = meta.get("totalCount") or len(offerings_local)
+            print(meta)
+            total_count_local = meta.get("count") or len(offerings_local)
             report_local = (
                 format_top_vacancies_report(offerings_local, top_n=VACANCY_TOP_N)
                 if offerings_local
