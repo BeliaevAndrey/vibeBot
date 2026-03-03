@@ -30,6 +30,192 @@ def get_reply(messages: list[dict], system_prompt: str = "") -> str:
     return response.choices[0].message.content or ""
 
 
+def generate_satisfaction_question(vacancy_description: str) -> str:
+    """
+    Сформировать вежливый вопрос об удовлетворённости вакансией.
+    Используется после отправки описания вакансии кандидату.
+    """
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    system = (
+        "Ты рекрутер/HR-менеджер по найму (живой человек) для массового найма "
+        "вахтовиков/сменщиков. Ты ведешь диалог с кандидатом в мессенджере.\n"
+        "Сформулируй один вежливый вопрос об удовлетворённости именно этой вакансией.\n"
+        "Язык: русский. Тон: вежливый, деловой, без воды. Не упоминай, что ты бот или ИИ."
+    )
+    user_content = (
+        "Кандидату только что было отправлено следующее описание вакансии:\n\n"
+        f"{vacancy_description}\n\n"
+        "Сформулируй один вопрос, чтобы узнать, насколько кандидату подходит эта вакансия."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        logging.getLogger("userbot").exception(
+            "Ошибка генерации вопроса об удовлетворённости вакансией: %s", e
+        )
+        # Фолбэк — простой шаблонный вопрос
+        return "Как вам эта вакансия? Подходит ли она вам?"
+
+
+def _call_analyze_vacancy_reply(
+    vacancy_description: str,
+    candidate_message: str,
+    history_snippet: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Внутренний вызов LLM для анализа ответа кандидата по вакансии.
+    Возвращает словарь с ключами analysis_result, reply_text, reason.
+    """
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    system = (
+        "Ты рекрутер/менеджер по найму (живой человек) для массового найма "
+        "вахтовиков/сменщиков. Ты ведёшь диалог с кандидатом в мессенджере.\n\n"
+        "У тебя есть описание вакансии и последнее сообщение кандидата.\n"
+        "Твоя задача — проанализировать сообщение кандидата и сгенерировать ответ от лица рекрутёра.\n\n"
+        "КРИТИЧЕСКИ ВАЖНО:\n"
+        "- Веди себя как живой человек, не упоминай, что ты бот/ИИ.\n"
+        "- Язык: русский, вежливый деловой тон, без канцелярита и воды.\n"
+        "- Если вопрос не по вакансии, вежливо (NB!) скажи, что вопрос не по делу, "
+        "и мягко верни разговор к обсуждению вакансии.\n"
+        "- Если вакансия понравилась, вежливо согласись, поддержи энтузиазм, пожелай успехов и т.п.\n"
+        "- Если сообщение содержит вопросы по вакансии, дай краткий, но по существу ответ, опираясь на описание вакансии.\n"
+        "- Если сообщение содержит отказ или явную неудовлетворённость вакансией, "
+        "вежливо уточни, что именно не подошло, и скажи, что постараешься подобрать другую вакансию.\n\n"
+        "analysis_result должен однозначно отражать реакцию кандидата:\n"
+        "1 — чёткий отказ от вакансии;\n"
+        "2 — ответ на вопросы (кандидат задаёт вопросы по вакансии);\n"
+        "3 — явное удовлетворение вакансией (кандидату подходит вакансия);\n"
+        "4 — требуется пояснение (ответ неоднозначен, нужно уточнение).\n"
+        "Ответ ДОЛЖЕН быть строго в виде JSON без какого-либо дополнительного текста."
+    )
+    history_part = f"\n\nКраткий контекст предыдущего диалога:\n{history_snippet}" if history_snippet else ""
+    user_content = (
+        "Описание вакансии, которое было отправлено кандидату:\n"
+        f"{vacancy_description}\n\n"
+        "Последнее сообщение кандидата:\n"
+        f"{candidate_message}\n"
+        f"{history_part}\n\n"
+        "Сформируй JSON следующего вида (СТРОГО соблюдай формат и ключи):\n"
+        '{\n'
+        '  "analysis_result": 1 | 2 | 3 | 4,\n'
+        '  "reply_text": "строка с твоим ответом кандидату",\n'
+        '  "reason": "краткое текстовое объяснение, почему выбран такой analysis_result"\n'
+        '}\n'
+        "Только JSON, без комментариев и пояснений."
+    )
+
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        temperature=0.7,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_content},
+        ],
+    )
+    content = resp.choices[0].message.content or ""
+    try:
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("analysis response is not a JSON object")
+        return {
+            "analysis_result": int(data.get("analysis_result", 4)),
+            "reply_text": str(data.get("reply_text", "") or ""),
+            "reason": str(data.get("reason", "") or ""),
+            "raw": data,
+        }
+    except Exception as e:
+        logging.getLogger("userbot").exception(
+            "Ошибка парсинга JSON анализа ответа по вакансии: %s; raw=%r", e, content
+        )
+        return {
+            "analysis_result": 4,
+            "reply_text": "Спасибо за ответ. Не до конца понял вашу реакцию на вакансию, "
+            "можете, пожалуйста, немного уточнить, что именно вы имеете в виду?",
+            "reason": "fallback after JSON parse error",
+            "raw": {"raw_text": content},
+        }
+
+
+def analyze_vacancy_reply(
+    vacancy_description: str,
+    candidate_message: str,
+    history: list[dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    """
+    Анализирует ответ кандидата по вакансии и возвращает словарь
+    с ключами analysis_result, reply_text, reason, raw.
+    """
+    history_snippet = None
+    if history:
+        # Возьмём последние 3-4 сообщения для контекста
+        tail = history[-4:]
+        parts: list[str] = []
+        for h in tail:
+            role = h.get("author") or h.get("role") or "unknown"
+            txt = h.get("text") or ""
+            parts.append(f"{role}: {txt}")
+        history_snippet = "\n".join(parts)
+
+    try:
+        return _call_analyze_vacancy_reply(
+            vacancy_description=vacancy_description,
+            candidate_message=candidate_message,
+            history_snippet=history_snippet,
+        )
+    except Exception as e:
+        logging.getLogger("userbot").exception(
+            "Ошибка анализа ответа кандидата по вакансии: %s", e
+        )
+        return {
+            "analysis_result": 4,
+            "reply_text": "Спасибо за ответ. Не до конца понял вашу реакцию на вакансию, "
+            "можете, пожалуйста, немного уточнить, что именно вы имеете в виду?",
+            "reason": "fallback after exception",
+            "raw": {},
+        }
+
+
+def generate_no_more_vacancies_message() -> str:
+    """
+    Сформировать вежливое сообщение, что других вакансий пока нет.
+    """
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    system = (
+        "Ты рекрутер/менеджер по найму (живой человек) для массового найма "
+        "вахтовиков/сменщиков. Ты ведёшь диалог с кандидатом в мессенджере."
+    )
+    user_content = (
+        "Составь вежливое сообщение кандидату, что других подходящих вакансий пока нет. "
+        "Язык: русский. Тон: вежливый, поддерживающий, без излишнего оптимизма и без мрачности."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            temperature=0.7,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_content},
+            ],
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as e:
+        logging.getLogger("userbot").exception(
+            "Ошибка генерации сообщения об отсутствии вакансий: %s", e
+        )
+        return (
+            "Сейчас других подходящих вакансий, к сожалению, нет. "
+            "Как только появится что-то подходящее, мы обязательно с вами свяжемся."
+        )
+
+
 def evaluate_agreement(user_message: str) -> bool:
     """
     Определить, согласен ли пользователь отвечать на вопросы (утвердительно/положительно).
