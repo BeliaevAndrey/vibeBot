@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from telethon.sync import TelegramClient
-from telethon import events
+from telethon import events, functions, types
 from telethon.errors import (
     SessionPasswordNeededError,
     PhoneNumberInvalidError,
@@ -134,6 +134,22 @@ def run_userbot(command_mode: bool = False) -> None:
                     idx += 1
                     continue
                 try:
+                    # Если есть номер телефона — добавим кандидата в контакты перед get_entity
+                    if phone:
+                        try:
+                            await client(functions.contacts.ImportContactsRequest(
+                                contacts=[
+                                    types.InputPhoneContact(
+                                        client_id=0,
+                                        phone=phone,
+                                        first_name=f"vaxtaR кандидат {phone}",
+                                        last_name="",
+                                    )
+                                ]
+                            ))
+                        except Exception as e:
+                            log.exception("Import contact failed for %s: %s", phone, e)
+
                     entity = await client.get_entity(peer)
                     candidate_user_id = entity.id
                     uname = getattr(entity, "username", None)
@@ -186,8 +202,11 @@ def run_userbot(command_mode: bool = False) -> None:
                     if result:
                         hr = cmd_state["hr_override"] or HR_ACCOUNT
                         await questionnaire.dump_result_and_save_text(
-                            result, client, hr_account=hr or None,
+                            result,
+                            client,
+                            hr_account=hr or None,
                             candidate_entity=cmd_state.get("candidate_user_id"),
+                            candidate_phone=None,
                         )
                         _record_processed(
                             processed_users,
@@ -387,7 +406,10 @@ def run_userbot(command_mode: bool = False) -> None:
                 result = questionnaire.finish_session(sender_id)
                 if result:
                     await questionnaire.dump_result_and_save_text(
-                        result, client, candidate_entity=candidate_user_id
+                        result,
+                        client,
+                        candidate_entity=candidate_user_id,
+                        candidate_phone=phone_src,
                     )
 
                 await _start_next_candidate()
