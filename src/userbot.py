@@ -175,6 +175,17 @@ def run_userbot(command_mode: bool = False) -> None:
             if not sender_id:
                 return
 
+            # Если для пользователя уже запущен диалог по вакансиям, обрабатываем его отдельно
+            dialog_state = questionnaire.get_dialogue_state(sender_id)
+            if dialog_state is not None:
+                handled = await questionnaire.handle_vacancy_dialogue_message(
+                    sender_id,
+                    text,
+                    client,
+                )
+                if handled:
+                    return
+
             # ----- Режим команд: опрос идёт — обрабатываем только кандидата -----
             if command_mode and cmd_state["questionnaire_running"]:
                 if sender_id != cmd_state["candidate_user_id"]:

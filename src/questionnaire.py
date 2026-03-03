@@ -43,6 +43,17 @@ UTC_PLUS_3 = timezone(timedelta(hours=3))
 # Состояние опросника по user_id (int)
 _state: dict[int, dict[str, Any]] = {}
 
+# Состояние диалога по вакансиям после отправки описания (по user_id)
+# Содержит:
+# - appropriate: id подходящей вакансии или None
+# - inappropriate: список id явно неподходящих вакансий
+# - vacancies_by_id: словарь {id: вакансия}
+# - ordered_ids: список id в порядке выдачи
+# - current_index/current_vacancy_id: позиция текущей вакансии
+# - history: список событий (кандидат/LLM, текст, vacancy_id, analysis_result, timestamp)
+# - dump_meta: данные для сохранения (id_value, ts_key, started_at)
+_dialogue_state: dict[int, dict[str, Any]] = {}
+
 # Тексты для ответов бота
 GOODBYE_DECLINED = "Спасибо за ответ. Если передумаете — мы всегда рады. Всего доброго!"
 GOODBYE_EARLY = "К сожалению, мы вынуждены завершить опрос. Спасибо за уделенное время."
@@ -93,6 +104,35 @@ def _load_questions() -> list[dict[str, Any]]:
 def _ensure_results_dirs() -> None:
     RESULTS_JSON_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_TEXT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _append_dialogue_history(
+    user_id: int,
+    *,
+    author: str,
+    text: str,
+    vacancy_id: int | None = None,
+    analysis_result: int | None = None,
+) -> None:
+    """Добавить событие в историю диалога по вакансиям."""
+    state = _dialogue_state.get(user_id)
+    if not state:
+        return
+    history: list[dict[str, Any]] = state.setdefault("history", [])
+    history.append(
+        {
+            "timestamp": datetime.now(UTC_PLUS_3).isoformat(),
+            "author": author,
+            "text": text,
+            "vacancy_id": vacancy_id,
+            "analysis_result": analysis_result,
+        }
+    )
+
+
+def get_dialogue_state(user_id: int) -> dict[str, Any] | None:
+    """Получить состояние диалога по вакансиям для пользователя, если оно есть."""
+    return _dialogue_state.get(user_id)
 
 
 def _get_fio_from_short(short: dict[str, Any]) -> tuple[str, str]:
@@ -412,7 +452,7 @@ async def dump_result_and_save_text(
     report_text: str | None = None
     total_count: int = 0
 
-    if short is not None and VACANCY_API_KEY and hr and client:
+        if short is not None and VACANCY_API_KEY and hr and client:
         def _fetch_and_report() -> tuple[list, str | None, int]:
             places_resp = get_places()
             places = places_resp.get("data", [])
@@ -514,6 +554,56 @@ async def dump_result_and_save_text(
                                 await asyncio.sleep(random.randint(4, 5))
 
                         print(f"Отчёт по вакансиям отправлен кандидату {candidate_entity}")
+                        # Инициализируем диалог по вакансиям для кандидата:
+                        # список найденных вакансий, текущая (первая) вакансия,
+                        # история сообщений и метаданные для дампа.
+                        try:
+                            if isinstance(candidate_entity, int):
+                                user_id_for_dialogue = candidate_entity
+                            else:
+                                # Если идентификатор не int, диалог по user_id не ведём
+                                user_id_for_dialogue = None
+                            if user_id_for_dialogue is not None and offerings:
+                                id_value = result.get("user") or candidate_phone or "unknown"
+                                started_at = datetime.now(UTC_PLUS_3)
+                                ts_key = started_at.strftime("%Y-%m-%d %H:%M")
+                                vacancies_by_id: dict[int, dict[str, Any]] = {}
+                                ordered_ids: list[int] = []
+                                for vac in offerings:
+                                    vid = vac.get("id")
+                                    if isinstance(vid, int):
+                                        vacancies_by_id[vid] = vac
+                                        ordered_ids.append(vid)
+                                current_vacancy_id = ordered_ids[0] if ordered_ids else None
+                                _dialogue_state[user_id_for_dialogue] = {
+                                    "appropriate": None,
+                                    "inappropriate": [],
+                                    "vacancies_by_id": vacancies_by_id,
+                                    "ordered_ids": ordered_ids,
+                                    "current_index": 0,
+                                    "current_vacancy_id": current_vacancy_id,
+                                    "history": [],
+                                    "dump_meta": {
+                                        "id_value": id_value,
+                                        "ts_key": ts_key,
+                                        "started_at": started_at.isoformat(),
+                                    },
+                                }
+                                # Сохраняем факт отправки вводного сообщения кандидату
+                                _append_dialogue_history(
+                                    user_id_for_dialogue,
+                                    author="system",
+                                    text=wait_msg,
+                                    vacancy_id=None,
+                                )
+                                _append_dialogue_history(
+                                    user_id_for_dialogue,
+                                    author="system",
+                                    text=candidate_intro,
+                                    vacancy_id=current_vacancy_id,
+                                )
+                        except Exception as e:
+                            log.exception("Init vacancy dialogue state failed: %s", e)
                     except Exception as e:
                         log.exception("Send vacancy report to candidate failed: %s", e)
             except Exception as e:
@@ -557,3 +647,175 @@ def finish_session(user_id: int) -> dict[str, Any] | None:
     if not state:
         return None
     return build_questionnaire_result_from_state(state)
+
+
+def _dump_dialogue_to_file(user_id: int) -> None:
+    """Сохранить состояние диалога по вакансиям в JSON (агрегированный формат)."""
+    state = _dialogue_state.get(user_id)
+    if not state:
+        return
+    if not SAVE_RESULTS_TO_FILES:
+        return
+    try:
+        RESULTS_JSON_DIR.mkdir(parents=True, exist_ok=True)
+        path = RESULTS_JSON_DIR / "vacancy_dialogues.json"
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data: dict[str, Any] = json.load(f)
+        else:
+            data = {}
+        dump_meta = state.get("dump_meta", {})
+        id_value = dump_meta.get("id_value", "unknown")
+        ts_key = dump_meta.get("ts_key") or datetime.now(UTC_PLUS_3).strftime("%Y-%m-%d %H:%M")
+        dict_key = f"({id_value}, {ts_key})"
+        # Подготовим компактное состояние для дампа
+        to_save = {
+            "appropriate": state.get("appropriate"),
+            "inappropriate": state.get("inappropriate", []),
+            "ordered_ids": state.get("ordered_ids", []),
+            "history": state.get("history", []),
+        }
+        # Для vacancies_by_id сохраняем как словарь {id: {...}}
+        vacancies_by_id = state.get("vacancies_by_id") or {}
+        to_save["vacancies_by_id"] = vacancies_by_id
+        data[dict_key] = to_save
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log.exception("Save vacancy_dialogues.json failed: %s", e)
+
+
+async def handle_vacancy_dialogue_message(
+    user_id: int,
+    message_text: str,
+    client: Any,
+) -> bool:
+    """
+    Обработать сообщение кандидата в рамках диалога по вакансиям.
+    Возвращает True, если сообщение обработано как часть диалога.
+    """
+    state = _dialogue_state.get(user_id)
+    if not state:
+        return False
+
+    current_vacancy_id = state.get("current_vacancy_id")
+    ordered_ids: list[int] = state.get("ordered_ids") or []
+    vacancies_by_id: dict[int, dict[str, Any]] = state.get("vacancies_by_id") or {}
+
+    # Записываем сообщение кандидата в историю
+    _append_dialogue_history(
+        user_id,
+        author="candidate",
+        text=message_text,
+        vacancy_id=current_vacancy_id,
+    )
+
+    if current_vacancy_id is None or current_vacancy_id not in vacancies_by_id:
+        # Нет актуальной вакансии — завершим диалог
+        _dump_dialogue_to_file(user_id)
+        _dialogue_state.pop(user_id, None)
+        return True
+
+    vacancy = vacancies_by_id[current_vacancy_id]
+    vacancy_desc = vacancy.get("description_text") or ""
+
+    # Анализируем ответ кандидата через LLM
+    analysis = openai_client.analyze_vacancy_reply(
+        vacancy_description=vacancy_desc,
+        candidate_message=message_text,
+        history=state.get("history"),
+    )
+    analysis_result = int(analysis.get("analysis_result", 4))
+    reply_text = analysis.get("reply_text", "") or ""
+
+    # Сохраняем ответ LLM в историю
+    _append_dialogue_history(
+        user_id,
+        author="llm",
+        text=reply_text,
+        vacancy_id=current_vacancy_id,
+        analysis_result=analysis_result,
+    )
+
+    # Отправляем ответ кандидату
+    try:
+        await client.send_message(user_id, reply_text)
+    except Exception as e:
+        log.exception("Send dialogue reply to candidate failed: %s", e)
+
+    inappropriate: list[int] = state.setdefault("inappropriate", [])
+
+    # Обработка результата анализа
+    if analysis_result == 1:
+        # Чёткий отказ — помечаем вакансию как неподходящую и ищем следующую
+        if current_vacancy_id not in inappropriate:
+            inappropriate.append(current_vacancy_id)
+        next_id: int | None = None
+        for vid in ordered_ids:
+            if vid == current_vacancy_id:
+                continue
+            if vid in inappropriate:
+                continue
+            if state.get("appropriate") == vid:
+                continue
+            next_id = vid
+            break
+
+        if next_id is None:
+            # Вакансий больше нет — отправляем вежливое сообщение и завершаем диалог
+            no_more = openai_client.generate_no_more_vacancies_message()
+            _append_dialogue_history(
+                user_id,
+                author="llm",
+                text=no_more,
+                vacancy_id=None,
+                analysis_result=None,
+            )
+            try:
+                await client.send_message(user_id, no_more)
+            except Exception as e:
+                log.exception("Send 'no more vacancies' message failed: %s", e)
+            _dump_dialogue_to_file(user_id)
+            _dialogue_state.pop(user_id, None)
+            return True
+
+        # Предлагаем следующую вакансию и задаём новый вопрос об удовлетворённости
+        state["current_vacancy_id"] = next_id
+        vacancy_next = vacancies_by_id[next_id]
+        report_for_next = format_top_vacancies_report([vacancy_next], top_n=1)
+        vacancy_parts = split_vacancy_messages(report_for_next)
+        try:
+            # Имитация задержки «вставки из буфера» уже реализована выше для первой вакансии;
+            # здесь отправляем части с небольшой задержкой между ними.
+            for idx, part in enumerate(vacancy_parts):
+                await client.send_message(user_id, part)
+                if idx < len(vacancy_parts) - 1:
+                    await asyncio.sleep(random.randint(4, 5))
+        except Exception as e:
+            log.exception("Send next vacancy to candidate failed: %s", e)
+
+        # Генерируем и отправляем новый вопрос об удовлетворённости
+        question = openai_client.generate_satisfaction_question(report_for_next)
+        _append_dialogue_history(
+            user_id,
+            author="llm",
+            text=question,
+            vacancy_id=next_id,
+            analysis_result=None,
+        )
+        try:
+            await client.send_message(user_id, question)
+        except Exception as e:
+            log.exception("Send satisfaction question for next vacancy failed: %s", e)
+        return True
+
+    if analysis_result == 3:
+        # Явное удовлетворение — фиксируем вакансию как подходящую и завершаем диалог
+        state["appropriate"] = current_vacancy_id
+        _dump_dialogue_to_file(user_id)
+        _dialogue_state.pop(user_id, None)
+        return True
+
+    # 2 — ответ на вопросы, 4 — требуется пояснение:
+    # просто продолжаем диалог по той же вакансии
+    return True
