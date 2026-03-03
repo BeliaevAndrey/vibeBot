@@ -20,7 +20,7 @@ def get_candidates() -> List[Tuple[Optional[str], Optional[str]]]:
     """
     # TODO: заменить на чтение из внешнего источника (CSV/JSON/БД).
     return [
-        ("@andrew107021", None),
         (None, "+7 981 793-20-78"),
+        # ("andrew107021", None),
     ]
 

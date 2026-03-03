@@ -109,12 +109,17 @@ def generate_filter(filters: Dict[str, Any]) -> Dict[str, Any]:
         ]
     }
 
-    return {
+    payload: Dict[str, Any] = {
         "$and": [
             {"$and": main_conditions},
             status_block,
         ]
     }
+
+    # Отладочный вывод построенного фильтра
+    _log.info("Построен фильтр вакансий: %s", payload)
+
+    return payload
 
 
 def filter_from_short(short: Dict[str, Any], places: List[Dict[str, Any]]) -> Dict[str, Any] | None:
@@ -153,7 +158,7 @@ def filter_from_short(short: Dict[str, Any], places: List[Dict[str, Any]]) -> Di
     job_type = short.get("job_type") if isinstance(short.get("job_type"), str) else None
     if job_type and job_type.strip():
         rev_cat = swap(CATEGORY)
-        code = rev_cat.get(job_type.strip())
+        code = rev_cat.get(job_type.strip().capitalize())
         if code:
             filters["f_offering_offering"] = [code]
 

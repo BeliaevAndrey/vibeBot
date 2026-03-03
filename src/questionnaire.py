@@ -300,6 +300,7 @@ async def dump_result_and_save_text(
     send_to_hr: bool = True,
     hr_account: str | None = None,
     candidate_entity: int | str | None = None,
+    candidate_phone: str | None = None,
 ) -> str:
     """
     Дамп questionnaire_result в questionnaire_results/json,
@@ -373,12 +374,38 @@ async def dump_result_and_save_text(
         log.exception("Short summary failed: %s", e)
 
     if SAVE_RESULTS_TO_FILES and short is not None:
+        # Старый формат: один файл на запуск (для истории)
         try:
             short_path = RESULTS_JSON_DIR / f"short_{user_label}_{safe_ts}.json"
             with open(short_path, "w", encoding="utf-8") as f:
                 json.dump(short, f, ensure_ascii=False, indent=2)
         except Exception as e:
             log.exception("Save short summary failed: %s", e)
+
+        # Новый агрегированный формат: { (id, datetime): short_with_phone }
+        try:
+            agg_path = RESULTS_JSON_DIR / "short.json"
+            if agg_path.exists():
+                with open(agg_path, "r", encoding="utf-8") as f:
+                    agg: dict[str, Any] = json.load(f)
+            else:
+                agg = {}
+
+            # Идентификатор кандидата в ключе: @username или телефон, если username нет
+            id_value = result.get("user") or candidate_phone or "unknown"
+            # Дата-время в ключе: "YYYY-mm-dd HH:MM"
+            ts_key = now.strftime("%Y-%m-%d %H:%M")
+            dict_key = f"({id_value}, {ts_key})"
+
+            entry = dict(short)
+            if candidate_phone:
+                entry["phone"] = candidate_phone
+
+            agg[dict_key] = entry
+            with open(agg_path, "w", encoding="utf-8") as f:
+                json.dump(agg, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log.exception("Save aggregated short.json failed: %s", e)
 
     # Автозагрузка вакансий по short: описание 1-й вакансии — HR напрямую; сохранение в файл только для истории
     offerings: list[dict[str, Any]] = []
@@ -494,12 +521,32 @@ async def dump_result_and_save_text(
 
     # Dump вакансий — полностью отвязано от отправки сообщений
     if SAVE_RESULTS_TO_FILES and offerings:
+        # Старый формат: список вакансий для одного запуска
         vac_path = RESULTS_JSON_DIR / f"vacancies_{user_label}_{safe_ts}.json"
         try:
             with open(vac_path, "w", encoding="utf-8") as f:
                 json.dump(offerings, f, ensure_ascii=False, indent=2)
         except Exception as e:
             log.exception("Save vacancies.json failed: %s", e)
+
+        # Новый агрегированный формат: { (id, datetime): [вакансии] }
+        try:
+            agg_vac_path = RESULTS_JSON_DIR / "vacancies.json"
+            if agg_vac_path.exists():
+                with open(agg_vac_path, "r", encoding="utf-8") as f:
+                    agg_vac: dict[str, Any] = json.load(f)
+            else:
+                agg_vac = {}
+
+            id_value = result.get("user") or candidate_phone or "unknown"
+            ts_key = now.strftime("%Y-%m-%d %H:%M")
+            dict_key = f"({id_value}, {ts_key})"
+
+            agg_vac[dict_key] = offerings
+            with open(agg_vac_path, "w", encoding="utf-8") as f:
+                json.dump(agg_vac, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            log.exception("Save aggregated vacancies.json failed: %s", e)
 
     return str(text_path)
 
