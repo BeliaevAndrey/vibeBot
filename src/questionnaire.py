@@ -452,7 +452,7 @@ async def dump_result_and_save_text(
     report_text: str | None = None
     total_count: int = 0
 
-        if short is not None and VACANCY_API_KEY and hr and client:
+    if short is not None and VACANCY_API_KEY and hr and client:
         def _fetch_and_report() -> tuple[list, str | None, int]:
             places_resp = get_places()
             places = places_resp.get("data", [])
@@ -464,7 +464,11 @@ async def dump_result_and_save_text(
             offerings_local = enrich_offerings(raw, places)
             meta = raw.get("meta") or {}
             total_count_local = meta.get("totalCount") or len(offerings_local)
-            report_local = format_top_vacancies_report(offerings_local, top_n=VACANCY_TOP_N) if offerings_local else None
+            report_local = (
+                format_top_vacancies_report(offerings_local, top_n=VACANCY_TOP_N)
+                if offerings_local
+                else None
+            )
             return offerings_local, report_local, total_count_local
 
         try:
@@ -583,6 +587,7 @@ async def dump_result_and_save_text(
                                     "current_index": 0,
                                     "current_vacancy_id": current_vacancy_id,
                                     "history": [],
+                                    "pending_next_vacancy": False,
                                     "dump_meta": {
                                         "id_value": id_value,
                                         "ts_key": ts_key,
@@ -601,6 +606,32 @@ async def dump_result_and_save_text(
                                     author="system",
                                     text=candidate_intro,
                                     vacancy_id=current_vacancy_id,
+                                )
+                                # Первый вопрос об удовлетворённости вакансией — сразу после отправки описания
+                                try:
+                                    satisfaction_question = openai_client.generate_satisfaction_question(
+                                        report_text
+                                    )
+                                except Exception as e:
+                                    log.exception(
+                                        "Generate satisfaction question failed: %s", e
+                                    )
+                                    satisfaction_question = (
+                                        "Как вы оцениваете эту вакансию по условиям работы и требованиям? "
+                                        "Подходит ли она вам?"
+                                    )
+                                _append_dialogue_history(
+                                    user_id_for_dialogue,
+                                    author="llm",
+                                    text=satisfaction_question,
+                                    vacancy_id=current_vacancy_id,
+                                )
+                                if TOGGLE_DELAY != "OFF":
+                                    await human_like_delay(
+                                        client, candidate_entity, satisfaction_question
+                                    )
+                                await client.send_message(
+                                    candidate_entity, satisfaction_question
                                 )
                         except Exception as e:
                             log.exception("Init vacancy dialogue state failed: %s", e)
@@ -747,9 +778,24 @@ async def handle_vacancy_dialogue_message(
 
     # Обработка результата анализа
     if analysis_result == 1:
-        # Чёткий отказ — помечаем вакансию как неподходящую и ищем следующую
+        # Чёткий отказ — помечаем вакансию как неподходящую и ждём пояснения кандидата.
+        # Новую вакансию НЕ отправляем сразу, только после следующего сообщения.
         if current_vacancy_id not in inappropriate:
             inappropriate.append(current_vacancy_id)
+        state["pending_next_vacancy"] = True
+        return True
+
+    if analysis_result == 3:
+        # Явное удовлетворение — фиксируем вакансию как подходящую и завершаем диалог
+        state["appropriate"] = current_vacancy_id
+        _dump_dialogue_to_file(user_id)
+        _dialogue_state.pop(user_id, None)
+        return True
+
+    # Если ранее был зафиксирован отказ и мы ожидали пояснение,
+    # а сейчас пришёл очередной ответ (analysis_result != 1),
+    # можно переходить к следующей вакансии (если она есть).
+    if state.get("pending_next_vacancy") and analysis_result != 1:
         next_id: int | None = None
         for vid in ordered_ids:
             if vid == current_vacancy_id:
@@ -779,14 +825,13 @@ async def handle_vacancy_dialogue_message(
             _dialogue_state.pop(user_id, None)
             return True
 
+        state["pending_next_vacancy"] = False
         # Предлагаем следующую вакансию и задаём новый вопрос об удовлетворённости
         state["current_vacancy_id"] = next_id
         vacancy_next = vacancies_by_id[next_id]
         report_for_next = format_top_vacancies_report([vacancy_next], top_n=1)
         vacancy_parts = split_vacancy_messages(report_for_next)
         try:
-            # Имитация задержки «вставки из буфера» уже реализована выше для первой вакансии;
-            # здесь отправляем части с небольшой задержкой между ними.
             for idx, part in enumerate(vacancy_parts):
                 await client.send_message(user_id, part)
                 if idx < len(vacancy_parts) - 1:
@@ -794,7 +839,6 @@ async def handle_vacancy_dialogue_message(
         except Exception as e:
             log.exception("Send next vacancy to candidate failed: %s", e)
 
-        # Генерируем и отправляем новый вопрос об удовлетворённости
         question = openai_client.generate_satisfaction_question(report_for_next)
         _append_dialogue_history(
             user_id,
@@ -807,13 +851,6 @@ async def handle_vacancy_dialogue_message(
             await client.send_message(user_id, question)
         except Exception as e:
             log.exception("Send satisfaction question for next vacancy failed: %s", e)
-        return True
-
-    if analysis_result == 3:
-        # Явное удовлетворение — фиксируем вакансию как подходящую и завершаем диалог
-        state["appropriate"] = current_vacancy_id
-        _dump_dialogue_to_file(user_id)
-        _dialogue_state.pop(user_id, None)
         return True
 
     # 2 — ответ на вопросы, 4 — требуется пояснение:
