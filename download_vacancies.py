@@ -85,6 +85,7 @@ def main() -> None:
 
         total = len(offerings)
         print(f"\nВсего найдено: {total} вакансий. Сохранено в файл: {out_path}")
+        print(raw_data.get("meta", "meta не найдено"))
     except Exception as e:
         log.exception("Ошибка загрузки вакансий: %s", e)
         raise
