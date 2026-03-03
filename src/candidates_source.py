@@ -19,8 +19,8 @@ def get_candidates() -> List[Tuple[Optional[str], Optional[str]]]:
     В позиции не должны одновременно отсутствовать и username, и phone.
     """
     # TODO: заменить на чтение из внешнего источника (CSV/JSON/БД).
+    # return [("@username", "+7 123 456 78 90"), ]
     return [
-        (None, "+7 981 793-20-78"),
-        # ("andrew107021", None),
+        (None, None),
     ]
 
