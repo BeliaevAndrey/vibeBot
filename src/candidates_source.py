@@ -8,6 +8,8 @@
 
 from typing import List, Optional, Tuple
 
+import json
+
 
 def get_candidates() -> List[Tuple[Optional[str], Optional[str]]]:
     """
@@ -19,8 +21,14 @@ def get_candidates() -> List[Tuple[Optional[str], Optional[str]]]:
     В позиции не должны одновременно отсутствовать и username, и phone.
     """
     # TODO: заменить на чтение из внешнего источника (CSV/JSON/БД).
-    # return [("@username", "+7 123 456 78 90"), ]
-    return [
-        (None, None),
-    ]
-
+    # Формат возвращаемого списка: [("@username", "+7 123 456 78 90"), ]
+    try:
+    with open("resource/json/contacts.json", "r", encoding="utf-8") as fi:
+            contacts = json.load(fi)
+        return contacts
+    except FileNotFoundError:
+        print("File not found")
+        return [(None, None)]
+    except json.JSONDecodeError as err:
+        print(f"JSON decode error: {err}")
+        return [(None, None)]
