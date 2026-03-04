@@ -6,6 +6,7 @@ UserBot — учётная запись Telegram, опросник с OpenAI.
 import asyncio
 import json
 import logging
+import random
 from datetime import datetime, timezone, timedelta
 
 from telethon.sync import TelegramClient
@@ -81,6 +82,34 @@ def run_userbot(command_mode: bool = False) -> None:
     current_candidate_index: int | None = None
     processed_users: dict[int, dict] = {}
 
+    # Отложенное выключение «В сети» когда все диалоги завершены (10–40 с)
+    offline_task_ref: dict = {"task": None}
+
+    async def _schedule_offline() -> None:
+        if offline_task_ref.get("task") and not offline_task_ref["task"].done():
+            offline_task_ref["task"].cancel()
+            try:
+                await offline_task_ref["task"]
+            except asyncio.CancelledError:
+                pass
+        delay = random.randint(10, 40)
+        async def _go_offline():
+            try:
+                await asyncio.sleep(delay)
+                await client(functions.account.UpdateStatusRequest(offline=True))
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                log.debug("Отложенный offline при завершении диалогов: %s", e)
+            finally:
+                offline_task_ref["task"] = None
+        offline_task_ref["task"] = client.loop.create_task(_go_offline())
+
+    def _cancel_offline_task() -> None:
+        t = offline_task_ref.get("task")
+        if t and not t.done():
+            t.cancel()
+
     cmd_log = None
     try:
         try:
@@ -118,11 +147,11 @@ def run_userbot(command_mode: bool = False) -> None:
                 log.exception("Handler error")
                 raise
 
-        async def _start_next_candidate() -> None:
-            """Запустить опрос следующего кандидата из списка (обычный режим)."""
+        async def _start_next_candidate() -> bool:
+            """Запустить опрос следующего кандидата из списка (обычный режим). Возвращает True, если опрос запущен."""
             nonlocal candidate_user_id, current_candidate_index
             if command_mode or not candidates_list:
-                return
+                return False
             idx = (current_candidate_index if current_candidate_index is not None else -1) + 1
             while idx < len(candidates_list):
                 entry = candidates_list[idx]
@@ -160,12 +189,13 @@ def run_userbot(command_mode: bool = False) -> None:
                     questionnaire.init_session(candidate_user_id, uname)
                     current_candidate_index = idx
                     print(f"Опрос запущен. Кандидат: {username or phone}.")
-                    return
+                    return True
                 except Exception as e:
                     log.exception("Не удалось запустить опрос для кандидата %s: %s", peer, e)
                     _record_processed(processed_users, None, username, phone, False, str(e), logger=log)
                     idx += 1
             print("Кандидаты закончились, новых опросов нет.")
+            return False
 
         async def _handle_message(event, client, command_mode, cmd_state, candidate_user_id):
             text = (event.text or "").strip()
@@ -178,11 +208,25 @@ def run_userbot(command_mode: bool = False) -> None:
             # Если для пользователя уже запущен диалог по вакансиям, обрабатываем его отдельно
             dialog_state = questionnaire.get_dialogue_state(sender_id)
             if dialog_state is not None:
+                # Диалог по вакансиям активен: показываем статус online и помечаем сообщение как прочитанное
+                _cancel_offline_task()
+                try:
+                    await client(functions.account.UpdateStatusRequest(offline=False))
+                except Exception:
+                    log.exception("Failed to update online status in dialogue")
+                try:
+                    await client.send_read_acknowledge(event.chat_id, max_id=event.message.id)
+                except Exception:
+                    log.exception("Failed to send read acknowledge in dialogue")
+
                 handled = await questionnaire.handle_vacancy_dialogue_message(
                     sender_id,
                     text,
                     client,
                 )
+                # Если диалог по вакансиям завершился — запланировать выключение «В сети» через 10–40 с
+                if questionnaire.get_dialogue_state(sender_id) is None:
+                    await _schedule_offline()
                 if handled:
                     return
 
@@ -190,6 +234,16 @@ def run_userbot(command_mode: bool = False) -> None:
             if command_mode and cmd_state["questionnaire_running"]:
                 if sender_id != cmd_state["candidate_user_id"]:
                     return
+                # Активный кандидат в режиме команд: online + read
+                _cancel_offline_task()
+                try:
+                    await client(functions.account.UpdateStatusRequest(offline=False))
+                except Exception:
+                    log.exception("Failed to update online status (command_mode candidate)")
+                try:
+                    await client.send_read_acknowledge(event.chat_id, max_id=event.message.id)
+                except Exception:
+                    log.exception("Failed to send read acknowledge (command_mode candidate)")
                 sender = await event.get_sender()
                 username_str = f"@{sender.username}" if getattr(sender, "username", None) else None
                 state = questionnaire.get_state(sender_id)
@@ -230,6 +284,8 @@ def run_userbot(command_mode: bool = False) -> None:
                         )
                     cmd_state["questionnaire_running"] = False
                     cmd_state["authenticated"] = False
+                    # Опрос завершён, активных диалогов нет — выключить «В сети» через 10–40 с
+                    await _schedule_offline()
                 return
 
             # ----- Режим команд: ожидание команд от оператора -----
@@ -380,6 +436,16 @@ def run_userbot(command_mode: bool = False) -> None:
             # ----- Обычный режим (не command_mode): один кандидат за раз из списка -----
             if candidate_user_id is not None and sender_id != candidate_user_id:
                 return
+            # Активный кандидат в обычном режиме: online + read
+            _cancel_offline_task()
+            try:
+                await client(functions.account.UpdateStatusRequest(offline=False))
+            except Exception:
+                log.exception("Failed to update online status (candidate)")
+            try:
+                await client.send_read_acknowledge(event.chat_id, max_id=event.message.id)
+            except Exception:
+                log.exception("Failed to send read acknowledge (candidate)")
 
             sender = await event.get_sender()
             username_str = f"@{sender.username}" if getattr(sender, "username", None) else None
@@ -423,11 +489,22 @@ def run_userbot(command_mode: bool = False) -> None:
                         candidate_phone=phone_src,
                     )
 
-                await _start_next_candidate()
+                started = await _start_next_candidate()
+                # Если следующего кандидата нет — выключить «В сети» через 10–40 с
+                if not started:
+                    await _schedule_offline()
 
         if not command_mode and candidates_list:
             # Старт первого кандидата после инициализации
             client.loop.create_task(_start_next_candidate())
+
+        # В режиме ожидания (до первого диалога) — сразу «не в сети»; online только во время диалога
+        try:
+            client.loop.run_until_complete(
+                client(functions.account.UpdateStatusRequest(offline=True))
+            )
+        except Exception as e:
+            log.debug("Начальный offline при старте: %s", e)
 
         client.run_until_disconnected()
 
@@ -446,5 +523,17 @@ def run_userbot(command_mode: bool = False) -> None:
     finally:
         if command_mode and cmd_log:
             cmd_log.info("конец сеанса command_mode")
+        # Отменяем отложенное выключение «В сети», если оно было запланировано
+        t = offline_task_ref.get("task")
+        if t and not t.done():
+            t.cancel()
+        # Снимаем статус «В сети» при завершении (в т.ч. по Ctrl+C)
+        try:
+            if client.is_connected():
+                client.loop.run_until_complete(
+                    client(functions.account.UpdateStatusRequest(offline=True))
+                )
+        except Exception as e:
+            log.debug("Не удалось выставить offline при выходе: %s", e)
         client.disconnect()
         print("Клиент отключён.")

@@ -24,8 +24,8 @@ def get_candidates() -> List[Tuple[Optional[str], Optional[str]]]:
     # Формат возвращаемого списка: [("@username", "+7 123 456 78 90"), ]
     try:
         with open("resource/json/contacts.json", "r", encoding="utf-8") as fi:
-                contacts = json.load(fi)
-            return contacts
+            contacts = json.load(fi)
+            return [*map(tuple, contacts)]
     except FileNotFoundError:
         print("File not found")
         return [(None, None)]
