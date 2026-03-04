@@ -178,6 +178,16 @@ def run_userbot(command_mode: bool = False) -> None:
             # Если для пользователя уже запущен диалог по вакансиям, обрабатываем его отдельно
             dialog_state = questionnaire.get_dialogue_state(sender_id)
             if dialog_state is not None:
+                # Диалог по вакансиям активен: показываем статус online и помечаем сообщение как прочитанное
+                try:
+                    await client(functions.account.UpdateStatusRequest(offline=False))
+                except Exception:
+                    log.exception("Failed to update online status in dialogue")
+                try:
+                    await client.send_read_acknowledge(event.chat_id, max_id=event.message.id)
+                except Exception:
+                    log.exception("Failed to send read acknowledge in dialogue")
+
                 handled = await questionnaire.handle_vacancy_dialogue_message(
                     sender_id,
                     text,
@@ -190,6 +200,15 @@ def run_userbot(command_mode: bool = False) -> None:
             if command_mode and cmd_state["questionnaire_running"]:
                 if sender_id != cmd_state["candidate_user_id"]:
                     return
+                # Активный кандидат в режиме команд: online + read
+                try:
+                    await client(functions.account.UpdateStatusRequest(offline=False))
+                except Exception:
+                    log.exception("Failed to update online status (command_mode candidate)")
+                try:
+                    await client.send_read_acknowledge(event.chat_id, max_id=event.message.id)
+                except Exception:
+                    log.exception("Failed to send read acknowledge (command_mode candidate)")
                 sender = await event.get_sender()
                 username_str = f"@{sender.username}" if getattr(sender, "username", None) else None
                 state = questionnaire.get_state(sender_id)
@@ -380,6 +399,15 @@ def run_userbot(command_mode: bool = False) -> None:
             # ----- Обычный режим (не command_mode): один кандидат за раз из списка -----
             if candidate_user_id is not None and sender_id != candidate_user_id:
                 return
+            # Активный кандидат в обычном режиме: online + read
+            try:
+                await client(functions.account.UpdateStatusRequest(offline=False))
+            except Exception:
+                log.exception("Failed to update online status (candidate)")
+            try:
+                await client.send_read_acknowledge(event.chat_id, max_id=event.message.id)
+            except Exception:
+                log.exception("Failed to send read acknowledge (candidate)")
 
             sender = await event.get_sender()
             username_str = f"@{sender.username}" if getattr(sender, "username", None) else None
