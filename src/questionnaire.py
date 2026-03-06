@@ -241,7 +241,8 @@ async def handle_agreement(user_id: int, username: str | None, message_text: str
         state["state"] = "completed"
         return ("Вопросов нет. Спасибо!", True)
     first_q = get_question_text(keys[0])
-    return (f"Вопрос 1.\n{first_q}", False)
+    # В диалоге отправляем только текст вопроса (без префикса «Вопрос N»)
+    return (first_q, False)
 
 
 async def handle_answer(
@@ -295,8 +296,8 @@ async def handle_answer(
 
     next_q_key = keys[state["current_q_index"]]
     next_q = get_question_text(next_q_key)
-    num = state["current_q_index"] + 1
-    return (f"Вопрос {num}.\n{next_q}", False)
+    # В диалоге отправляем только текст вопроса
+    return (next_q, False)
 
 
 def build_questionnaire_result_from_state(state: dict[str, Any]) -> dict[str, Any]:
