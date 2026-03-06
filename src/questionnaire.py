@@ -483,6 +483,14 @@ async def dump_result_and_save_text(
 
         print(f"Всего найдено вакансий: {total_count}")
 
+        if not offerings or total_count == 0:
+            try:
+                # TODO: заменить на более содержательное уведомление HR
+                # о причинах отсутствия подходящих вакансий и вариантах дальнейших действий.
+                await client.send_message(hr, "Подходящие вакансии не найдены.")
+            except Exception as e:
+                log.exception("Send 'no vacancies found' notice to HR failed: %s", e)
+
         if report_text:
             try:
                 candidate_display = result.get("user", "unknown")
