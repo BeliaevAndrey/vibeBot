@@ -726,6 +726,13 @@ def _dump_dialogue_to_file(user_id: int) -> None:
         log.exception("Save vacancy_dialogues.json failed: %s", e)
 
 
+def _log_dialogue_finished(user_id: int, reason: str) -> None:
+    """Логирование полного окончания диалога по вакансиям с кандидатом."""
+    msg = f"Диалог по вакансиям с кандидатом user_id={user_id} завершён: {reason}"
+    log.info(msg)
+    print(msg)
+
+
 async def handle_vacancy_dialogue_message(
     user_id: int,
     message_text: str,
@@ -755,6 +762,7 @@ async def handle_vacancy_dialogue_message(
         # Нет актуальной вакансии — завершим диалог
         _dump_dialogue_to_file(user_id)
         _dialogue_state.pop(user_id, None)
+        _log_dialogue_finished(user_id, "нет актуальной вакансии в состоянии диалога")
         return True
 
     vacancy = vacancies_by_id[current_vacancy_id]
@@ -800,6 +808,7 @@ async def handle_vacancy_dialogue_message(
         state["appropriate"] = current_vacancy_id
         _dump_dialogue_to_file(user_id)
         _dialogue_state.pop(user_id, None)
+        _log_dialogue_finished(user_id, "кандидат явно удовлетворён вакансией")
         return True
 
     # Если ранее был зафиксирован отказ и мы ожидали пояснение,
@@ -833,6 +842,7 @@ async def handle_vacancy_dialogue_message(
                 log.exception("Send 'no more vacancies' message failed: %s", e)
             _dump_dialogue_to_file(user_id)
             _dialogue_state.pop(user_id, None)
+            _log_dialogue_finished(user_id, "подходящих вакансий больше нет")
             return True
 
         state["pending_next_vacancy"] = False

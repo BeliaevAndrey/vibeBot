@@ -30,6 +30,47 @@ def get_reply(messages: list[dict], system_prompt: str = "") -> str:
     return response.choices[0].message.content or ""
 
 
+def _extract_json_object(content: str) -> str:
+    """
+    Попробовать вытащить чистый JSON-объект из ответа модели.
+    Убираем markdown-кодблоки ```json/...```, обрезаем всё до первой '{' и после последней '}'.
+    Если ничего вменяемого не нашли — возвращаем исходную строку.
+    """
+    if not content:
+        return content
+
+    stripped = content.strip()
+
+    # Убираем обёртки ```...```, если есть
+    if stripped.startswith("```"):
+        # Срезаем первые и последние ``` (с возможным языком)
+        # Пример: ```json\n{...}\n```
+        # Сначала убираем первую строку с ```
+        lines = stripped.splitlines()
+        # убираем первую строку, если она начинается с ```
+        if lines and lines[0].lstrip().startswith("```"):
+            lines = lines[1:]
+        # убираем последнюю строку, если она == ``` или начинается с ```
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+
+    # Попробуем взять подстроку от первой '{' до последней '}'
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = stripped[start : end + 1].strip()
+        if candidate and candidate != content:
+            logging.getLogger("userbot").debug(
+                "extract_json_object: cleaned JSON candidate: %r (from raw=%r)",
+                candidate,
+                content,
+            )
+        return candidate or content
+
+    return content
+
+
 def generate_satisfaction_question(vacancy_description: str) -> str:
     """
     Сформировать вежливый вопрос об удовлетворённости вакансией.
@@ -94,7 +135,9 @@ def _call_analyze_vacancy_reply(
         "2 — ответ на вопросы (кандидат задаёт вопросы по вакансии);\n"
         "3 — явное удовлетворение вакансией (кандидату подходит вакансия);\n"
         "4 — требуется пояснение (ответ неоднозначен, нужно уточнение).\n"
-        "Ответ ДОЛЖЕН быть строго в виде JSON без какого-либо дополнительного текста."
+        "Ответ ДОЛЖЕН быть строго в виде JSON без какого-либо дополнительного текста.\n"
+        "КРИТИЧЕСКИ ВАЖНО: НЕ используй тройные кавычки ``` и не оборачивай ответ в markdown-кодблок. "
+        "Ответ должен начинаться с символа '{' и заканчиваться символом '}', без символов до и после JSON."
     )
     history_part = f"\n\nКраткий контекст предыдущего диалога:\n{history_snippet}" if history_snippet else ""
     user_content = (
@@ -103,7 +146,7 @@ def _call_analyze_vacancy_reply(
         "Последнее сообщение кандидата:\n"
         f"{candidate_message}\n"
         f"{history_part}\n\n"
-        "Сформируй JSON следующего вида (СТРОГО соблюдай формат и ключи):\n"
+        "Сформируй JSON следующего вида (СТРОГО соблюдай формат и ключи, без markdown и ```):\n"
         '{\n'
         '  "analysis_result": 1 | 2 | 3 | 4,\n'
         '  "reply_text": "строка с твоим ответом кандидату",\n'
@@ -121,8 +164,9 @@ def _call_analyze_vacancy_reply(
         ],
     )
     content = resp.choices[0].message.content or ""
+    cleaned = _extract_json_object(content)
     try:
-        data = json.loads(content)
+        data = json.loads(cleaned)
         if not isinstance(data, dict):
             raise ValueError("analysis response is not a JSON object")
         return {
